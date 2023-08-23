@@ -1,13 +1,19 @@
-from setuptools import setup
+from setuptools import setup, find_packages
+
+with open("README.md", "r", encoding="utf-8") as fh:
+    long_description = fh.read()
 
 setup(name='sama',
-        version='0.0.1',
-        description='Sama Python Client',
+        version='0.0.6',
+        description='Sama Python Client and Databricks Connector',
+        long_description=long_description,
+        long_description_content_type="text/markdown",
         url='https://www.sama.com',
         author='Edward',
-        author_email='echan@sama.com',
+        author_email='echan@samasource.org',
         license='MIT',
-        packages=['sama'],
+        packages=find_packages(),
         install_requires=[
-            'retry'
+            'retry',
+            'requests'
         ])

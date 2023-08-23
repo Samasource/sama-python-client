@@ -2,18 +2,27 @@
 
 ## Sama SDK
 
-These are Python wrappers for Sama API endpoints.
+This is the Python Client for the [Sama API endpoints](https://docs.sama.com/reference/documentation) and Databricks Connector.
 
 ### Usage
 
 ```python
-client = SamaAPIClient("your_api_key")
+from sama import Client
+client = Client("your_api_key")
 client.create_task_batch("project_id", [{"input1": "value1", "input2": "value2"}])
+client.fetch_deliveries_since_timestamp("project_id", timestamp)
+```
+
+```python
+from sama.databricks import Client
+client = Client("your_api_key")
+client.create_task_batch_from_table("project_id", df)
+df = client.fetch_deliveries_since_timestamp_to_table("project_id", timestamp)
 ```
 
 ---
 
-## SamaAPIClient
+## sama Client
 
 This class provides methods to interact with Sama API endpoints.
 
@@ -24,10 +33,9 @@ This method is the constructor to initialize the Sama API client.
 #### Parameters
 
 - `api_key` (str): The API key to use for authentication.
-- `secondary_key` (Union[str, None], optional): The secondary (internal) API key, needed for extra API features. Defaults to `None`.
 - `requests_session_keep_alive` (bool, optional): Preference for corresponding requests.session setting. Defaults to `False`.
 - `requests_session_stream` (bool, optional): Preference for corresponding requests.session setting. Defaults to `False`.
-- `silent` (bool, optional): Whether to suppress all print/log statements. Defaults to `False`.
+- `silent` (bool, optional): Whether to suppress all print/log statements. Defaults to `True`.
 - `retry_attempts` (int, optional): The number of times to retry a request before giving up. Defaults to `5`.
 - `retry_delay` (float, optional): Time in seconds to wait before retrying a request. Defaults to `2`.
 - `retry_backoff` (float, optional): Factor by which to increase the retry delay after each attempt. Defaults to `2`.
@@ -75,6 +83,9 @@ This method fetches all deliveries since the last API call.
 - `proj_id` (str): The project ID on SamaHub.
 - `consumer` (str): The name of the consumer.
 - `page_size` (int, optional): The number of deliveries per page. Defaults to `1000`.
+
+
+## sama.databricks Client
 
 ### `create_task_batch_from_table` method
 
