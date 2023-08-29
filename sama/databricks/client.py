@@ -14,23 +14,18 @@ class Client:
     def __init__(
         self,
         api_key: str,
-        requests_session_keep_alive: bool = False,
-        requests_session_stream: bool = False,
         silent: bool = True,
-        retry_attempts: int = 5,
-        retry_delay: float = 2,
-        retry_backoff: float = 2,
         logger: Union[logging.Logger, None] = None,
         log_level: int = logging.INFO,
     ) -> None:
         
-        self.sama_client = samaClient(api_key, requests_session_keep_alive, requests_session_stream, silent, retry_attempts, retry_delay, retry_backoff, logger, log_level)
+        self.sama_client = samaClient(api_key, silent, logger, log_level)
 
     def create_task_batch_from_table(
         self,
         proj_id: str,
         spark_dataframe
-    ) -> requests.Response:
+    ):
         
         data = spark_dataframe.toPandas().to_dict(orient='records')
 
@@ -44,13 +39,9 @@ class Client:
 
         return self.sama_client.create_task_batch(proj_id, data)
 
-    def fetch_deliveries_since_timestamp_to_table(
-        self,
-        proj_id, 
-        timestamp,
-        page_size=1000):
+    def fetch_deliveries_since_timestamp_to_table(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, from_timestamp=None, task_id=None, page_size=1000):
         
-        data = self.sama_client.fetch_deliveries_since_timestamp(proj_id,timestamp,page_size)
+        data = self.sama_client.fetch_deliveries_since_timestamp(proj_id, batch_id=batch_id, client_batch_id=client_batch_id, client_batch_id_match_type=client_batch_id_match_type, from_timestamp=from_timestamp, task_id=task_id, page_size=page_size)
 
         for data_item in data:
             data_item['answers'] = json.dumps(data_item['answers'])
