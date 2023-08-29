@@ -13,12 +13,14 @@ class CustomHTTPException(Exception):
     MAX_TRIES = 5
     DELAY = 2
     BACKOFF = 2
-    ERROR_CODES = [429, 502, 503, 504]
+    ERROR_CODES = [429, 502, 503, 504] #429 API Rate limit reached
 
     @staticmethod
-    def raise_for_error_code(response_code):
+    def raise_for_error_code(response_code, response):
         if response_code in CustomHTTPException.ERROR_CODES:
-            raise CustomHTTPException(f"HTTP Error: {response_code}")
+            raise CustomHTTPException(f"Retriable HTTP Error: {response_code}")
+        else:
+            response.raise_for_status()
 
 class Client:
     """
@@ -84,6 +86,39 @@ class Client:
                 self.logger.log(self.log_level, prefix + message)
             else:
                 print(prefix + message)
+
+    @retry(CustomHTTPException, tries=CustomHTTPException.MAX_TRIES, delay=CustomHTTPException.DELAY, backoff=CustomHTTPException.BACKOFF)
+    def __fetch_single_page(self, url, params=None, headers=None):
+
+        response = requests.get(url, params=params, headers=headers)
+
+        CustomHTTPException.raise_for_error_code(response.status_code, response)
+
+        return response.json()
+
+    def __fetch_paginated_results(self, t_url, t_headers, t_params, t_page_size=1000):
+        all_results = []
+        page_number = 1  # Start from the first page
+        
+        while True:
+            t_params.update({
+                'page': page_number,
+                'page_size': t_page_size
+            })
+            
+            data = self.__fetch_single_page(t_url, t_params, t_headers)
+
+            if not data or not data['tasks']:  # if data is an empty list or equivalent
+                break
+
+            all_results.extend(data['tasks'])
+        
+            if len(data['tasks']) < t_page_size: # nothing in next page
+                break
+
+            page_number += 1  # increment to fetch the next page
+
+        return all_results
 
     def create_task_batch(
         self,
@@ -244,7 +279,44 @@ class Client:
 
         return run()
 
-    def fetch_deliveries_since_timestamp(self, proj_id, timestamp, page_size=1000):
+    def get_task_status(self, proj_id, task_id, same_as_delivery=True):
+        """
+        Fetches task info for a single task
+        https://docs.sama.com/reference/singletaskstatus
+        """
+
+        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/{task_id}.json"
+        headers = {"Accept": "application/json"}
+        query_params = {
+            "access_key": self.api_key,
+            "same_as_delivery": same_as_delivery }
+
+        return self.__fetch_paginated_results(url,headers,query_params)
+
+
+    def get_multi_task_status(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, date_type=None, from_timestamp=None, to_timestamp=None, state:TaskStates = None, omit_answers=True, page_size=100):
+        """
+        Fetches task info for multiple tasks
+        https://docs.sama.com/reference/multitaskstatus
+        """
+
+        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks.json"
+        headers = {"Accept": "application/json"}
+        query_params = {
+            "access_key": self.api_key,
+            "batch_id": batch_id,
+            "client_batch_id": client_batch_id,
+            "client_batch_id_match_type": client_batch_id_match_type,
+            "date_type":date_type,
+            "from":from_timestamp,
+            "to":to_timestamp,
+            "state":state.value,
+            "omit_answers":omit_answers
+        } 
+
+        return self.__fetch_paginated_results(url,headers,query_params,t_page_size=page_size)
+  
+    def fetch_deliveries_since_timestamp(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, from_timestamp=None, task_id=None, page_size=1000):
         """
         Fetches all deliveries since a given timestamp (in the
         RFC3339 format)
@@ -252,22 +324,17 @@ class Client:
 
         url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/delivered.json"
         headers = {"Accept": "application/json"}
-        query_params = {"from": timestamp, "page": 1, "page_size": page_size, "access_key": self.api_key}  # dynamic
+        query_params = {
+            "access_key": self.api_key,
+            "batch_id": batch_id,
+            "client_batch_id": client_batch_id,
+            "client_batch_id_match_type": client_batch_id_match_type,
+            "from": from_timestamp,
+            "task_id": task_id
+        } 
 
-        tasks = []
-        while True:
-            self.__log_message(f'Sending delivery request for page #{query_params["page"]}')
-            resp = self.session.request("GET", url, headers=headers, params=query_params)
-            self.__log_message(f"Delivery request response:\n{resp.text}")
-
-            page_tasks = resp.json()["tasks"]
-            tasks += page_tasks
-            if page_size != len(page_tasks):
-                break
-            query_params["page"] += 1
-
-        return tasks
-
+        return self.__fetch_paginated_results(url,headers,query_params,t_page_size=page_size)
+    
     def fetch_deliveries_since_last_call(self, proj_id, consumer, page_size=1000):
         url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/delivered.json"
         payload = {
@@ -291,59 +358,7 @@ class Client:
 
         return tasks
 
-    def get_task_status(self, proj_id, task_id, same_as_delivery=True):
-        """
-        Fetches info for a single task
-        """
 
-        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/{task_id}.json"
-        headers = {"Accept": "application/json"}
-        query_params = {
-            "access_key": self.api_key,
-            "same_as_delivery": same_as_delivery }
-
-        resp = self.session.request("GET", url, headers=headers, params=query_params)
-        self.__log_message(f"Get single tasks status request response:\n{resp.text}")
-
-        return resp.json()["tasks"]
-
-    @retry(CustomHTTPException, tries=CustomHTTPException.MAX_TRIES, delay=CustomHTTPException.DELAY, backoff=CustomHTTPException.BACKOFF)
-    def get_multi_task_status(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, date_type=None, from_timestamp=None, to_timestamp=None, state:TaskStates = None, omit_answers=True, page_size=100):
-        """
-        Fetches info for multiple tasks
-        """
-
-        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks.json"
-        headers = {"Accept": "application/json"}
-        query_params = {
-            "access_key": self.api_key,
-            "batch_id": batch_id,
-            "client_batch_id": client_batch_id,
-            "client_batch_id_match_type": client_batch_id_match_type,
-            "date_type":date_type,
-            "from":from_timestamp,
-            "to":to_timestamp,
-            "state":state.value,
-            "omit_answers":omit_answers,
-            "page": 1, 
-            "page_size": page_size, }  # dynamic
-
-        tasks = []
-        while True:
-            self.__log_message(f'Sending tasks request for page #{query_params["page"]}')
-            resp = self.session.request("GET", url, headers=headers, params=query_params)
-            self.__log_message(f"Get multi status request response:\n{resp.text}")
-
-            CustomHTTPException.raise_for_error_code(resp.status_code)
-
-            page_tasks = resp.json()["tasks"]
-            tasks += page_tasks
-            if page_size != len(page_tasks):
-                break
-            query_params["page"] += 1
-
-        return tasks
-    
     def get_status_batch_creation_job(self, proj_id, batch_id, omit_failed_task_data=False, page_size=1000):
         """
         Fetches batch creation job info
