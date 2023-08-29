@@ -9,6 +9,17 @@ import json
 
 from sama.constants.tasks import TaskStates
 
+class CustomHTTPException(Exception):
+    MAX_TRIES = 5
+    DELAY = 2
+    BACKOFF = 2
+    ERROR_CODES = [429, 502, 503, 504]
+
+    @staticmethod
+    def raise_for_error_code(response_code):
+        if response_code in CustomHTTPException.ERROR_CODES:
+            raise CustomHTTPException(f"HTTP Error: {response_code}")
+
 class Client:
     """
     Provides methods to interact with Sama API endpoints
@@ -296,8 +307,8 @@ class Client:
 
         return resp.json()["tasks"]
 
-
-    def get_multi_task_status(self, proj_id, batch_id=None, client_batch_id=None, date_type=None, from_timestamp=None, to_timestamp=None, state:TaskStates = None, omit_answers=True, page_size=100):
+    @retry(CustomHTTPException, tries=CustomHTTPException.MAX_TRIES, delay=CustomHTTPException.DELAY, backoff=CustomHTTPException.BACKOFF)
+    def get_multi_task_status(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, date_type=None, from_timestamp=None, to_timestamp=None, state:TaskStates = None, omit_answers=True, page_size=100):
         """
         Fetches info for multiple tasks
         """
@@ -308,9 +319,10 @@ class Client:
             "access_key": self.api_key,
             "batch_id": batch_id,
             "client_batch_id": client_batch_id,
+            "client_batch_id_match_type": client_batch_id_match_type,
             "date_type":date_type,
-            "from_timestamp":from_timestamp,
-            "to_timestamp":to_timestamp,
+            "from":from_timestamp,
+            "to":to_timestamp,
             "state":state.value,
             "omit_answers":omit_answers,
             "page": 1, 
@@ -321,6 +333,8 @@ class Client:
             self.__log_message(f'Sending tasks request for page #{query_params["page"]}')
             resp = self.session.request("GET", url, headers=headers, params=query_params)
             self.__log_message(f"Get multi status request response:\n{resp.text}")
+
+            CustomHTTPException.raise_for_error_code(resp.status_code)
 
             page_tasks = resp.json()["tasks"]
             tasks += page_tasks
