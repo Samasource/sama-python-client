@@ -1,10 +1,10 @@
 [tool.poetry]
 name = "sama-client"
-version = "1.0.0"
-description = ""
-authors = ["Rajvir Jhawar <rjhawar@sama.com>"]
+version = "0.0.7b1"
+description = "Sama SDK for Python"
+authors = ["Edward Chan <echan@sama.com>", "Rajvir Jhawar <rjhawar@sama.com>"]
 readme = "README.md"
-license = "CC-BY-NC-4.0"
+license = ""
 
 [tool.poetry.dependencies]
 python = "^3.9"
