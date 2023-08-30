@@ -5,24 +5,32 @@ from typing import Any, Dict, List, Union
 import requests
 from retry import retry
 
-import json
-
 from sama.constants.tasks import TaskStates
+
+class CustomHTTPException(Exception):
+    MAX_TRIES = 5
+    DELAY = 1
+    BACKOFF = 2
+    ERROR_CODES = [429, 502, 503, 504] #429 API Rate limit reached
+
+    @staticmethod
+    def raise_for_error_code(response_code, response):
+        if response_code in CustomHTTPException.ERROR_CODES:
+            raise CustomHTTPException(f"Retriable HTTP Error: {response_code}")
+        else:
+            response.raise_for_status()
 
 class Client:
     """
-    Provides methods to interact with Sama API endpoints
+    Provides methods to interact with Sama API endpoints.
+    Automatically retries http calls using delay, backoff on API rate limit or 502,503,504 errors.
+    Streams paginated results
     """
 
     def __init__(
         self,
         api_key: str,
-        requests_session_keep_alive: bool = False,
-        requests_session_stream: bool = False,
         silent: bool = True,
-        retry_attempts: int = 5,
-        retry_delay: float = 2,
-        retry_backoff: float = 2,
         logger: Union[logging.Logger, None] = None,
         log_level: int = logging.INFO,
     ) -> None:
@@ -31,12 +39,7 @@ class Client:
 
         Args:
             api_key (str): The API key to use for authentication
-            requests_session_keep_alive (bool): Preference for corresponding requests.session setting. Defaults to False
-            requests_session_stream (bool): Preference for corresponding requests.session setting. Defaults to False
             silent (bool): Whether to suppress all print/log statements. Defaults to False
-            retry_attempts (int): The number of times to retry a request before giving up. Defaults to 5
-            retry_delay (float): Time in seconds to wait before retrying a request. Defaults to 2
-            retry_backoff (float): Factor by which to increase the retry delay after each attempt. Defaults to 2
             logger (Union[Logger, None]): The logger to use for logging.
                 Defaults to None, meaning API interaction logs are printed to stdout
                 (unless silent is True), and retry logs are not recorded.
@@ -48,14 +51,6 @@ class Client:
 
         self.api_key = api_key
         self.silent = silent
-
-        self.session = requests.session()
-        self.session.keep_alive = requests_session_keep_alive
-        self.session.stream = requests_session_stream
-
-        self.retry_attempts = retry_attempts
-        self.retry_delay = retry_delay
-        self.retry_backoff = retry_backoff
 
         self.logger = logger
         self.log_level = log_level
@@ -74,6 +69,42 @@ class Client:
             else:
                 print(prefix + message)
 
+    @retry(CustomHTTPException, tries=CustomHTTPException.MAX_TRIES, delay=CustomHTTPException.DELAY, backoff=CustomHTTPException.BACKOFF)
+    def __call_and_retry_http_method(self, url, json=None, params=None, headers=None, method=None):
+
+        if method == "POST":
+            response = requests.post(url, json=json, params=params, headers=headers)
+        elif method == "PUT":
+            response = requests.put(url, json=json, params=params, headers=headers)
+        elif method == "GET":
+            response = requests.get(url, params=params, headers=headers)
+
+        CustomHTTPException.raise_for_error_code(response.status_code, response)
+
+        return response.json() if response.text else None
+
+    def __fetch_paginated_results(self, url, json, params, headers, page_size=1000, method=None):
+        page_number = 1  # Start from the first page
+        
+        while True:
+            params.update({
+                'page': page_number,
+                'page_size': page_size
+            })
+            
+            data = self.__call_and_retry_http_method(url, json=json, params=params, headers=headers, method=method)
+
+            if not data or not data['tasks']:  # if data is an empty list or equivalent
+                break
+
+            for item in data['tasks']:
+                yield item
+
+            if len(data['tasks']) < page_size: # nothing in next page
+                break
+
+            page_number += 1  # increment to fetch the next page
+
     def create_task_batch(
         self,
         proj_id: str,
@@ -81,7 +112,7 @@ class Client:
         batch_priority: int = 0,
         notification_email: Union[str, None] = None,
         submit: bool = False,
-    ) -> requests.Response:
+    ):
         """
         Creates a batch of tasks using the two async batch task creation API endpoints
         (the tasks file upload approach)
@@ -90,48 +121,38 @@ class Client:
             proj_id (str): The project ID on SamaHub where tasks are to be created
             task_data_records (List[Dict[str, Any]]): The list of task "data" dicts
                 (inputs + preannotations)
-            batch_priority (int): The priority of the batch. Defaults to 0
+            batch_priority (int): The priority of the batch. Defaults to 0. Negative numbers indicate higher priority
             notification_email (Union[str, None]): The email address where SamaHub
                 should send notifications about the batch creation status. Defaults to None
             submit (bool): Whether to create the tasks in submitted state. Defaults to False
         """
 
-        @retry(tries=self.retry_attempts, delay=self.retry_delay, backoff=self.retry_backoff, logger=self.logger)
-        def run():
-            credentials = {"access_key": self.api_key}
+        url = f"https://api.sama.com/v2/projects/{proj_id}/batches.json"
+        headers = { "Accept": "application/json", "Content-Type": "application/json"}
+        json = { "notification_email": notification_email }
+        params = { "access_key": self.api_key }
 
-            self.__log_message("Sending batch initialisation request")
-            init_url = f"https://api.sama.com/v2/projects/{proj_id}/batches.json"
-            headers = {"Accept": "application/json", "Content-Type": "application/json"}
-            if notification_email != None:
-                payload = {"notification_email": notification_email}
-                init_resp = self.session.request("POST", init_url, headers=headers, params=credentials, json=payload)
-            else:
-                init_resp = self.session.request("POST", init_url, headers=headers, params=credentials)
-            self.__log_message(f"Batch initialisation response:\n{init_resp.text}")
-            init_resp = init_resp.json()
+        # construct the tasks list, which contains objects with data(inputs, pre-annotations), priority and whether to submit
+        tasks = []
+        for task_data in task_data_records:
+            tasks.append({
+                "data": task_data,
+                "priority": batch_priority, 
+                "submit": submit
+            })
 
-            self.__log_message("Uploading tasks file")
-            batch_id = init_resp["batch_id"]
-            tasks_put_url = init_resp["tasks_put_url"]
-            tasks = []
-            for task_data in task_data_records:
-                tasks.append({"data": task_data, "priority": batch_priority, "submit": submit})
-            payload = tasks
-            upload_resp = self.session.request("PUT", tasks_put_url, json=payload, headers=headers)
-            self.__log_message(f"Tasks file upload response:\n{upload_resp.text}")
+        # call the 'create a batch of tasks' endpoint without the tasks list. It'll return a batch_id and a tasks_put_url(AWS S3) in which we'll upload the tasks to instead to avoid the 1000 tasks limit
+        json_response = self.__call_and_retry_http_method(url=url, json=json, params=params, headers=headers, method="POST") 
+        
+        # upload tasks directly to AWS S3 pre-signed url
+        self.__call_and_retry_http_method(url=json_response["tasks_put_url"], json=tasks, params=None, headers=headers, method="PUT")
+        
+        # call the 'create a batch of tasks from an uploaded file' endpoint to signal file was uploaded and start creating tasks from it
+        batch_id = json_response["batch_id"]
+        url = f"https://api.sama.com/v2/projects/{proj_id}/batches/{batch_id}/continue.json"
+        return self.__call_and_retry_http_method(url=url, headers=headers, params=params, method="POST")
 
-            self.__log_message(f"Sending file-driven batch creation request")
-            cont_url = f"https://api.sama.com/v2/projects/{proj_id}/batches/{batch_id}/continue.json"
-            headers = {"Accept": "application/json"}
-            creation_resp = self.session.request("POST", cont_url, headers=headers, params=credentials)
-            self.__log_message(f"Task creation response:\n{creation_resp.text}")
-
-            return creation_resp
-
-        return run()
-
-    def cancel_batch_creation_job(self, proj_id: str, batch_id: str) -> requests.Response:
+    def cancel_batch_creation_job(self, proj_id: str, batch_id: str):
         """
         cancel batch creation job
 
@@ -139,20 +160,11 @@ class Client:
             proj_id (str): The project ID on SamaHub where the task exists
             batch_id (str): The IDs of the batch to cancel
         """
+        url = f"https://api.sama.com/v2/projects/{proj_id}/batches/{batch_id}/cancel.json"
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        params = {"access_key": self.api_key}
 
-        @retry(tries=self.retry_attempts, delay=self.retry_delay, backoff=self.retry_backoff, logger=self.logger)
-        def run():
-            url = f"https://api.sama.com/v2/projects/{proj_id}/batches/{batch_id}/cancel.json"
-            headers = {"Accept": "application/json", "Content-Type": "application/json"}
-            credentials = {"access_key": self.api_key}
-
-            self.__log_message(f"Sending cancel request for batch {batch_id}")
-            resp = self.session.request("POST", url, headers=headers, params=credentials)
-            self.__log_message(f"batch cancel response:\n{resp.text}")
-
-            return resp
-
-        return run()
+        return self.__call_and_retry_http_method(url, params=params, headers=headers, method="POST")
 
     def reject_task(self, proj_id: str, task_id: str, reasons: List[str]) -> requests.Response:
         """
@@ -164,22 +176,14 @@ class Client:
             reasons (List[str]): The list of reasons for rejecting the task
         """
 
-        @retry(tries=self.retry_attempts, delay=self.retry_delay, backoff=self.retry_backoff, logger=self.logger)
-        def run():
-            url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/{task_id}/reject.json"
-            headers = {"Accept": "application/json", "Content-Type": "application/json"}
-            credentials = {"access_key": self.api_key}
-            payload = {"reasons": reasons}
+        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/{task_id}/reject.json"
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        json = {"reasons": reasons}
+        params = {"access_key": self.api_key}
 
-            self.__log_message(f"Sending rejection request for task {task_id}")
-            resp = self.session.request("PUT", url, json=payload, headers=headers, params=credentials)
-            self.__log_message(f"Task rejection response:\n{resp.text}")
-
-            return resp
-
-        return run()
+        return self.__call_and_retry_http_method(url, json=json, params=params, headers=headers, method="PUT")
     
-    def update_task_priority(self, proj_id: str, task_ids: List[str], priority: int) -> requests.Response:
+    def update_task_priorities(self, proj_id: str, task_ids: List[str], priority: int) -> requests.Response:
         """
         Updates priority of tasks
 
@@ -189,23 +193,15 @@ class Client:
             priority (int): The priority
         """
 
-        @retry(tries=self.retry_attempts, delay=self.retry_delay, backoff=self.retry_backoff, logger=self.logger)
-        def run():
-            url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/bulk_update.json"
-            headers = {"Accept": "application/json", "Content-Type": "application/json"}
-            credentials = {"access_key": self.api_key}
-            payload = {
+        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/bulk_update.json"
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        json = {
                 "task_ids": task_ids,
                 "priority": priority
-            }
+        }
+        params = {"access_key": self.api_key}
 
-            self.__log_message(f"Sending priority update request for tasks {task_ids}")
-            resp = self.session.request("POST", url, json=payload, headers=headers, params=credentials)
-            self.__log_message(f"Tasks update priority response:\n{resp.text}")
-
-            return resp
-
-        return run()
+        return self.__call_and_retry_http_method(url, json=json, params=params, headers=headers, method="POST")
 
     def delete_tasks(self, proj_id: str, task_ids: List[str]) -> requests.Response:
         """
@@ -216,73 +212,33 @@ class Client:
             task_ids (List[str]): The IDs of the tasks to delete
         """
 
-        @retry(tries=self.retry_attempts, delay=self.retry_delay, backoff=self.retry_backoff, logger=self.logger)
-        def run():
-            url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/delete_tasks.json"
-            headers = {"Accept": "application/json", "Content-Type": "application/json"}
-            credentials = {"access_key": self.api_key}
-            payload = {
-                "task_ids": task_ids
-            }
-
-            self.__log_message(f"Sending delete request for tasks {task_ids}")
-            resp = self.session.request("POST", url, json=payload, headers=headers, params=credentials)
-            self.__log_message(f"Tasks delete response:\n{resp.text}")
-
-            return resp
-
-        return run()
-
-    def fetch_deliveries_since_timestamp(self, proj_id, timestamp, page_size=1000):
-        """
-        Fetches all deliveries since a given timestamp (in the
-        RFC3339 format)
-        """
-
-        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/delivered.json"
-        headers = {"Accept": "application/json"}
-        query_params = {"from": timestamp, "page": 1, "page_size": page_size, "access_key": self.api_key}  # dynamic
-
-        tasks = []
-        while True:
-            self.__log_message(f'Sending delivery request for page #{query_params["page"]}')
-            resp = self.session.request("GET", url, headers=headers, params=query_params)
-            self.__log_message(f"Delivery request response:\n{resp.text}")
-
-            page_tasks = resp.json()["tasks"]
-            tasks += page_tasks
-            if page_size != len(page_tasks):
-                break
-            query_params["page"] += 1
-
-        return tasks
-
-    def fetch_deliveries_since_last_call(self, proj_id, consumer, page_size=1000):
-        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/delivered.json"
-        payload = {
-            "limit": page_size,
-            "consumer": consumer,
-        }
+        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/delete_tasks.json"
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
-        cred = {"access_key": self.api_key}
+        json = {
+                "task_ids": task_ids
+        }
+        params = {"access_key": self.api_key}
 
-        tasks = []
-        i = 1
-        while True:
-            self.__log_message(f"Sending delivery request #{i}")
-            response = self.session.request("POST", url, json=payload, headers=headers, params=cred)
-            res_tasks = response.json()["tasks"]
-            tasks += res_tasks
-            self.__log_message(f"Delivery request response:\n{response.text}")
-            if len(res_tasks) < page_size:
-                break
-            i += 1
-
-        return tasks
+        return self.__call_and_retry_http_method(url, json=json, params=params, headers=headers, method="POST")
 
     def get_task_status(self, proj_id, task_id, same_as_delivery=True):
         """
-        Fetches info for a single task
+        Fetches task info for a single task
+        https://docs.sama.com/reference/singletaskstatus
+
+        Args:
+            proj_id (str): The unique identifier of the project on SamaHub. 
+                            Specifies the project under which the task resides.
+            
+            task_id (str): The unique identifier of the task within the specified 
+                            project on SamaHub. Identifies the specific task for 
+                            which the status is being requested.
+
+            same_as_delivery (bool, optional): Flag to determine the format of the 
+                                                task data to be returned. If True (default),
+                                                task data is returned in the same format 
+                                                as delivery.
+    
         """
 
         url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/{task_id}.json"
@@ -291,48 +247,160 @@ class Client:
             "access_key": self.api_key,
             "same_as_delivery": same_as_delivery }
 
-        resp = self.session.request("GET", url, headers=headers, params=query_params)
-        self.__log_message(f"Get single tasks status request response:\n{resp.text}")
-
-        return resp.json()["tasks"]
+        return next(self.__fetch_paginated_results(url, json=None, params=query_params, headers=headers, method="GET"))
 
 
-    def get_multi_task_status(self, proj_id, batch_id=None, client_batch_id=None, date_type=None, from_timestamp=None, to_timestamp=None, state:TaskStates = None, omit_answers=True, page_size=100):
-        """
-        Fetches info for multiple tasks
+    def get_multi_task_status(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, date_type=None, from_timestamp=None, to_timestamp=None, state:TaskStates = None, omit_answers=True):
+        """     
+        Fetches task info for multiple tasks based on the provided filters.
+        Returns generator object that is iterable.
+        https://docs.sama.com/reference/multitaskstatus
+
+        Args:
+            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+                        the project under which the tasks reside.
+
+            batch_id (str, optional): The identifier for a batch within the project. 
+                                    If provided, filters tasks that belong to this batch.
+
+            client_batch_id (str, optional): The client-specific identifier for a batch. 
+                                            Useful for filtering tasks based on client-defined batches.
+
+            client_batch_id_match_type (str, optional): Specifies how the client_batch_id 
+                                                        should be matched. Common options might 
+                                                        include "exact" or "contains".
+
+            date_type (str, optional): Determines which date to use for the timestamp 
+                                    filters. Examples might include "creation_date" or "completion_date".
+
+            from_timestamp (str, optional): Filters tasks that have a date (specified by date_type) 
+                                            after this timestamp.
+
+            to_timestamp (str, optional): Filters tasks that have a date (specified by date_type) 
+                                        before this timestamp.
+
+            state (TaskStates, optional): An enum value that specifies the desired status of the 
+                                        tasks to filter. For example, "delivered" or "acknowledged".
+
+            omit_answers (bool, optional): Flag to determine if answers related to tasks should 
+                                        be omitted from the response. Defaults to True.
+
         """
 
         url = f"https://api.sama.com/v2/projects/{proj_id}/tasks.json"
+        headers = {"Accept": "application/json"}
+        t_state = getattr(state, 'value', None)
+        query_params = {
+            "access_key": self.api_key,
+            "batch_id": batch_id,
+            "client_batch_id": client_batch_id,
+            "client_batch_id_match_type": client_batch_id_match_type,
+            "date_type":date_type,
+            "from":from_timestamp,
+            "to":to_timestamp,
+            "state":t_state,
+            "omit_answers":omit_answers
+        } 
+        page_size=100
+
+        return self.__fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
+  
+    def fetch_deliveries_since_timestamp(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, from_timestamp=None, task_id=None):
+        """
+        Fetches all deliveries since a given timestamp(in the
+        RFC3339 format) for the specified project and optional filters.
+        Returns generator object that is iterable.
+        
+        Args:
+            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+                        the project under which the deliveries reside.
+
+            batch_id (str, optional): The identifier for a batch within the project. 
+                                    If provided, filters deliveries that belong to this batch.
+
+            client_batch_id (str, optional): The client-specific identifier for a batch. 
+                                            Useful for filtering deliveries based on client-defined batches.
+
+            client_batch_id_match_type (str, optional): Specifies how the client_batch_id 
+                                                        should be matched. Common options might 
+                                                        include "exact" or "contains".
+
+            from_timestamp (str, optional): Filters deliveries that have a date 
+                                            after this timestamp.
+
+            task_id (str, optional): The unique identifier for a specific task. If provided, 
+                                    fetches deliveries related to this specific task.
+        """
+
+        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/delivered.json"
         headers = {"Accept": "application/json"}
         query_params = {
             "access_key": self.api_key,
             "batch_id": batch_id,
             "client_batch_id": client_batch_id,
-            "date_type":date_type,
-            "from_timestamp":from_timestamp,
-            "to_timestamp":to_timestamp,
-            "state":state.value,
-            "omit_answers":omit_answers,
-            "page": 1, 
-            "page_size": page_size, }  # dynamic
+            "client_batch_id_match_type": client_batch_id_match_type,
+            "from": from_timestamp,
+            "task_id": task_id
+        } 
+        page_size=1000
 
-        tasks = []
-        while True:
-            self.__log_message(f'Sending tasks request for page #{query_params["page"]}')
-            resp = self.session.request("GET", url, headers=headers, params=query_params)
-            self.__log_message(f"Get multi status request response:\n{resp.text}")
-
-            page_tasks = resp.json()["tasks"]
-            tasks += page_tasks
-            if page_size != len(page_tasks):
-                break
-            query_params["page"] += 1
-
-        return tasks
+        return self.__fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
     
-    def get_status_batch_creation_job(self, proj_id, batch_id, omit_failed_task_data=False, page_size=1000):
+    def fetch_deliveries_since_last_call(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, consumer=None):
         """
-        Fetches batch creation job info
+        Fetches all deliveries since last call based on a consumer token.
+        Returns generator object that is iterable.
+
+        Args:
+            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+                        the project under which the deliveries reside.
+
+            batch_id (str, optional): The identifier for a batch within the project. 
+                                    If provided, filters deliveries that belong to this batch.
+
+            client_batch_id (str, optional): The client-specific identifier for a batch. 
+                                            Useful for filtering deliveries based on client-defined batches.
+
+            client_batch_id_match_type (str, optional): Specifies how the client_batch_id 
+                                                        should be matched. Common options might 
+                                                        include "exact" or "contains".
+
+            consumer (str, optional): Token that identifies the caller, so different consumers 
+                                      can be in different places of the delivered tasks list.
+        """
+
+        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/delivered.json"
+        query_params = {
+            "access_key": self.api_key,
+        }
+        payload = {
+            "batch_id": batch_id,
+            "client_batch_id": client_batch_id,
+            "client_batch_id_match_type": client_batch_id_match_type,
+            "consumer": consumer,
+            "limit": limit
+        }
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        limit=1000
+
+        return self.__fetch_paginated_results(url, json=payload, params=query_params, headers=headers, page_size=limit, method="POST")
+
+
+    def get_status_batch_creation_job(self, proj_id, batch_id, omit_failed_task_data=False):
+        """
+        Retrieves the status of a batch creation job in the SamaHub project.
+        Returns generator object that is iterable.
+        
+        Args:
+            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+                        the project under which the batch resides.
+
+            batch_id (str): The identifier for the batch within the project. This batch's 
+                            creation status will be fetched.
+
+            omit_failed_task_data (bool, optional): If set to True, the returned information 
+                                                will not include data related to tasks that 
+                                                failed during the batch creation. Defaults to False.
         """
 
         url = f"https://api.sama.com/v2/projects/{proj_id}/batches/{batch_id}.json"
@@ -340,24 +408,10 @@ class Client:
         query_params = {
             "access_key": self.api_key,
             "batch_id": batch_id,
-            "omit_failed_task_data":omit_failed_task_data,
-            "page": 1, 
-            "page_size": page_size, }  # dynamic
+            "omit_failed_task_data":omit_failed_task_data
+        } 
+        page_size=1000
 
-        tasks = []
-        while True:
-            self.__log_message(f'Get batch creation job status for page #{query_params["page"]}')
-            resp = self.session.request("GET", url, headers=headers, params=query_params)
-            self.__log_message(f"Get batch creation job status response:\n{resp.text}")
-
-            page_tasks = resp.json()["tasks"]
-            tasks += page_tasks
-            if page_size != len(page_tasks):
-                break
-            query_params["page"] += 1
-
-        resp_json = resp.json()
-        resp_json['tasks'] = tasks
-
-        return resp_json
+        return self.__fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
+  
     
