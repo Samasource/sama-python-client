@@ -225,6 +225,20 @@ class Client:
         """
         Fetches task info for a single task
         https://docs.sama.com/reference/singletaskstatus
+
+        Args:
+            proj_id (str): The unique identifier of the project on SamaHub. 
+                            Specifies the project under which the task resides.
+            
+            task_id (str): The unique identifier of the task within the specified 
+                            project on SamaHub. Identifies the specific task for 
+                            which the status is being requested.
+
+            same_as_delivery (bool, optional): Flag to determine the format of the 
+                                                task data to be returned. If True (default),
+                                                task data is returned in the same format 
+                                                as delivery.
+    
         """
 
         url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/{task_id}.json"
@@ -236,18 +250,46 @@ class Client:
         return next(self.__fetch_paginated_results(url, json=None, params=query_params, headers=headers, method="GET"))
 
 
-    def get_multi_task_status(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, date_type=None, from_timestamp=None, to_timestamp=None, state:TaskStates = None, omit_answers=True, page_size=100):
-        """
-        Fetches task info for multiple tasks.
+    def get_multi_task_status(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, date_type=None, from_timestamp=None, to_timestamp=None, state:TaskStates = None, omit_answers=True):
+        """     
+        Fetches task info for multiple tasks based on the provided filters.
         Returns generator object that is iterable.
         https://docs.sama.com/reference/multitaskstatus
+
+        Args:
+            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+                        the project under which the tasks reside.
+
+            batch_id (str, optional): The identifier for a batch within the project. 
+                                    If provided, filters tasks that belong to this batch.
+
+            client_batch_id (str, optional): The client-specific identifier for a batch. 
+                                            Useful for filtering tasks based on client-defined batches.
+
+            client_batch_id_match_type (str, optional): Specifies how the client_batch_id 
+                                                        should be matched. Common options might 
+                                                        include "exact" or "contains".
+
+            date_type (str, optional): Determines which date to use for the timestamp 
+                                    filters. Examples might include "creation_date" or "completion_date".
+
+            from_timestamp (str, optional): Filters tasks that have a date (specified by date_type) 
+                                            after this timestamp.
+
+            to_timestamp (str, optional): Filters tasks that have a date (specified by date_type) 
+                                        before this timestamp.
+
+            state (TaskStates, optional): An enum value that specifies the desired status of the 
+                                        tasks to filter. For example, "delivered" or "acknowledged".
+
+            omit_answers (bool, optional): Flag to determine if answers related to tasks should 
+                                        be omitted from the response. Defaults to True.
+
         """
 
         url = f"https://api.sama.com/v2/projects/{proj_id}/tasks.json"
         headers = {"Accept": "application/json"}
-
         t_state = getattr(state, 'value', None)
-
         query_params = {
             "access_key": self.api_key,
             "batch_id": batch_id,
@@ -259,14 +301,35 @@ class Client:
             "state":t_state,
             "omit_answers":omit_answers
         } 
+        page_size=100
 
         return self.__fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
   
-    def fetch_deliveries_since_timestamp(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, from_timestamp=None, task_id=None, page_size=1000):
+    def fetch_deliveries_since_timestamp(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, from_timestamp=None, task_id=None):
         """
-        Fetches all deliveries since a given timestamp (in the
-        RFC3339 format)
+        Fetches all deliveries since a given timestamp(in the
+        RFC3339 format) for the specified project and optional filters.
         Returns generator object that is iterable.
+        
+        Args:
+            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+                        the project under which the deliveries reside.
+
+            batch_id (str, optional): The identifier for a batch within the project. 
+                                    If provided, filters deliveries that belong to this batch.
+
+            client_batch_id (str, optional): The client-specific identifier for a batch. 
+                                            Useful for filtering deliveries based on client-defined batches.
+
+            client_batch_id_match_type (str, optional): Specifies how the client_batch_id 
+                                                        should be matched. Common options might 
+                                                        include "exact" or "contains".
+
+            from_timestamp (str, optional): Filters deliveries that have a date 
+                                            after this timestamp.
+
+            task_id (str, optional): The unique identifier for a specific task. If provided, 
+                                    fetches deliveries related to this specific task.
         """
 
         url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/delivered.json"
@@ -279,13 +342,31 @@ class Client:
             "from": from_timestamp,
             "task_id": task_id
         } 
+        page_size=1000
 
         return self.__fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
     
-    def fetch_deliveries_since_last_call(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, consumer=None, limit=1000):
+    def fetch_deliveries_since_last_call(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, consumer=None):
         """
         Fetches all deliveries since last call based on a consumer token.
         Returns generator object that is iterable.
+
+        Args:
+            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+                        the project under which the deliveries reside.
+
+            batch_id (str, optional): The identifier for a batch within the project. 
+                                    If provided, filters deliveries that belong to this batch.
+
+            client_batch_id (str, optional): The client-specific identifier for a batch. 
+                                            Useful for filtering deliveries based on client-defined batches.
+
+            client_batch_id_match_type (str, optional): Specifies how the client_batch_id 
+                                                        should be matched. Common options might 
+                                                        include "exact" or "contains".
+
+            consumer (str, optional): Token that identifies the caller, so different consumers 
+                                      can be in different places of the delivered tasks list.
         """
 
         url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/delivered.json"
@@ -300,13 +381,26 @@ class Client:
             "limit": limit
         }
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        limit=1000
 
         return self.__fetch_paginated_results(url, json=payload, params=query_params, headers=headers, page_size=limit, method="POST")
 
 
-    def get_status_batch_creation_job(self, proj_id, batch_id, omit_failed_task_data=False, page_size=1000):
+    def get_status_batch_creation_job(self, proj_id, batch_id, omit_failed_task_data=False):
         """
-        Fetches batch creation job info
+        Retrieves the status of a batch creation job in the SamaHub project.
+        Returns generator object that is iterable.
+        
+        Args:
+            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+                        the project under which the batch resides.
+
+            batch_id (str): The identifier for the batch within the project. This batch's 
+                            creation status will be fetched.
+
+            omit_failed_task_data (bool, optional): If set to True, the returned information 
+                                                will not include data related to tasks that 
+                                                failed during the batch creation. Defaults to False.
         """
 
         url = f"https://api.sama.com/v2/projects/{proj_id}/batches/{batch_id}.json"
@@ -316,6 +410,7 @@ class Client:
             "batch_id": batch_id,
             "omit_failed_task_data":omit_failed_task_data
         } 
+        page_size=1000
 
         return self.__fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
   
