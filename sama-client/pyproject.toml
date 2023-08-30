@@ -1,0 +1,31 @@
+[tool.poetry]
+name = "sama-client"
+version = "1.0.0"
+description = ""
+authors = ["Rajvir Jhawar <rjhawar@sama.com>"]
+readme = "README.md"
+license = "CC-BY-NC-4.0"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+
+
+[tool.poetry.group.dev.dependencies]
+mkdocs-material = "^9.2.5"
+mkdocstrings-python = "^1.6.0"
+python-dotenv = "^1.0.0"
+
+
+[[tool.poetry.source]]
+name = "PyPI"
+priority = "primary"
+
+
+[[tool.poetry.source]]
+name = "narwhal-pypi"
+url = "https://us-central1-python.pkg.dev/solution-eng-345114/narwhal-pypi/simple/"
+priority = "supplemental"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
