@@ -2,89 +2,45 @@
 
 ## Sama SDK
 
-This is the Python Client for the [Sama API endpoints](https://docs.sama.com/reference/documentation) and Databricks Connector.
+This is the Python Client for the [SamaHub API endpoints](https://docs.sama.com/reference/documentation) and Databricks Connector.
 
 ### Usage
 
 ```python
 from sama import Client
 client = Client("your_api_key")
-client.create_task_batch("project_id", [{"input1": "value1", "input2": "value2"}])
-client.fetch_deliveries_since_timestamp("project_id", from_timestamp="2023-09-02T10:23:36.536167366Z")
+client.create_task_batch("project_id", [{"url": "https://yoururl.com/img.jpg", "input2": "value2"}])
+client.get_delivered_tasks("project_id", from_timestamp="2023-09-02T10:23:36.536167366Z")
 ```
 
 ```python
 from sama.databricks import Client
+import pyspark
+from pyspark.sql import SparkSession
+from pyspark.sql import DataFrame
+
+spark = SparkSession.builder.appName('sama').getOrCreate()
 client = Client("your_api_key")
-client.create_task_batch_from_table("project_id", df)
-df = client.fetch_deliveries_since_timestamp_to_table("project_id", from_timestamp="2023-09-02T10:23:36.536167366Z")
+spark_df = client.get_delivered_tasks_to_table(spark, "project_id", from_timestamp="2023-09-02T10:23:36.536167366Z")
+client.create_task_batch_from_table("project_id", spark_df) # spark_df contains inputs to tasks
 ```
 
 ---
 
 ## sama Client
 
-This class provides methods to interact with Sama API endpoints.
+This class provides methods to interact with SamaHub API endpoints.
 
 ### `__init__` method
 
-This method is the constructor to initialize the Sama API client.
+This method is the constructor to initialize the SamaHub API client.
 
 #### Parameters
 
 - `api_key` (str): The API key to use for authentication.
 - `silent` (bool, optional): Whether to suppress all print/log statements. Defaults to `True`.
-- `logger` (Union[Logger, None], optional): The logger to use for logging. Defaults to `None`.
+- `logger` (Logger, optional): The logger to use for logging. Defaults to `None`.
 - `log_level` (int, optional): The log level to use for logging. Defaults to `logging.INFO`.
-
----
-
-### `__call_and_retry_http_method`
-
-Makes an HTTP request and retries in case of a `CustomHTTPException`.
-
-#### Decorator
-
-- `@retry`: This method uses the `retry` decorator for error handling. It will retry the call in case a `CustomHTTPException` is raised.
-
-#### Parameters
-
-- `url (str)`: The API endpoint to call.
-- `json (dict, optional)`: The JSON payload to send with the request.
-- `params (dict, optional)`: URL parameters to append to the endpoint.
-- `headers (dict, optional)`: Additional headers to send with the request.
-- `method (str)`: The HTTP method to use (`POST`, `PUT`, `GET`).
-
-#### Returns
-
-- JSON response from the HTTP request if there's content in the response. `None` otherwise.
-
-#### Notes
-
-- If the HTTP status code in the response indicates an error, a `CustomHTTPException` will be raised.
-
----
-
-### `__fetch_paginated_results`
-
-Fetches paginated results from an API endpoint until there are no more results.
-
-#### Parameters
-
-- `url (str)`: The API endpoint to call.
-- `json (dict)`: The JSON payload to send with the request.
-- `params (dict)`: URL parameters to append to the endpoint.
-- `headers (dict)`: Additional headers to send with the request.
-- `page_size (int, default=1000)`: Number of results to fetch per page.
-- `method (str)`: The HTTP method to use.
-
-#### Yields
-
-- Items from the 'tasks' key in the response data.
-
-#### Notes
-
-- The method will continue to fetch subsequent pages until the returned list of tasks is shorter than `page_size` or empty.
 
 ---
 
@@ -248,6 +204,7 @@ This method fetches all deliveries since a given timestamp
 
 **Parameters:**
 
+- `spark (SparkSession)` : A spark session
 - `proj_id (str)`: The unique identifier of the project on SamaHub. Specifies the project under which the deliveries reside.
 - `batch_id (str, optional)`: The identifier for a batch within the project. If provided, filters deliveries that belong to this batch.
 - `client_batch_id (str, optional)`: The client-specific identifier for a batch. Useful for filtering deliveries based on client-defined batches.
@@ -267,14 +224,11 @@ Fetches all deliveries since the last call based on a consumer token.
 
 **Parameters:**
 
+- `spark (SparkSession)` : A spark session
 - `proj_id (str)`: The unique identifier of the project on SamaHub. Specifies the project under which the deliveries reside.
-
 - `batch_id (str, optional)`: The identifier for a batch within the project. If provided, filters deliveries that belong to this batch.
-
 - `client_batch_id (str, optional)`: The client-specific identifier for a batch. Useful for filtering deliveries based on client-defined batches.
-
 - `client_batch_id_match_type (str, optional)`: Specifies how the `client_batch_id` should be matched. Common options might include "exact" or "contains".
-
 - `consumer (str, optional)`: Token that identifies the caller, so different consumers can be in different places of the delivered tasks list.
 
 **Returns:**
@@ -288,6 +242,7 @@ Returns deliveries in a DataFrame.
 Fetches the status and details of a single task. More details can be found in the [Sama documentation](https://docs.sama.com/reference/singletaskstatus).
 
 **Parameters:**
+- `spark (SparkSession)` : A spark session
 - `proj_id`: The project ID on SamaHub.
 - `task_id`: The ID of the task to fetch.
 - `same_as_delivery (default=True)`: Whether to fetch the task as it would be delivered.
@@ -302,6 +257,7 @@ Fetches the status and details of a single task. More details can be found in th
 Fetches status and details for multiple tasks. More details can be found in the [Sama documentation](https://docs.sama.com/reference/multitaskstatus).
 
 **Parameters:**
+- `spark (SparkSession)` : A spark session
 - `proj_id (str)`: The unique identifier of the project on SamaHub. This parameter specifies the project under which the tasks reside.
 - `batch_id (str, optional)`: The identifier for a batch within the project. If provided, it filters tasks that belong to this specific batch.
 - `client_batch_id (str, optional)`: The client-specific identifier for a batch. This is useful for filtering tasks based on client-defined batches.

@@ -72,6 +72,10 @@ class Client:
     @retry(RetriableHTTPExceptions, tries=RetriableHTTPExceptions.MAX_TRIES, delay=RetriableHTTPExceptions.DELAY, backoff=RetriableHTTPExceptions.BACKOFF)
     def _call_and_retry_http_method(self, url, json=None, params=None, headers=None, method=None):
 
+        # Convert boolean values to lowercase strings
+        if params is not None and isinstance(params, dict):
+            params = {k: str(v).lower() if isinstance(v, bool) else v for k, v in params.items()}
+
         if method == "POST":
             response = requests.post(url, json=json, params=params, headers=headers)
         elif method == "PUT":
@@ -227,6 +231,7 @@ class Client:
     def get_task_status(self, project_id: str, task_id: str, same_as_delivery=True):
         """
         Fetches task info for a single task
+        Returns generator object that is iterable.
         https://docs.sama.com/reference/singletaskstatus
 
         Args:
@@ -250,7 +255,7 @@ class Client:
             "access_key": self.api_key,
             "same_as_delivery": same_as_delivery }
 
-        return next(self._fetch_paginated_results(url, json=None, params=query_params, headers=headers, method="GET"))
+        return self._fetch_paginated_results(url, json=None, params=query_params, headers=headers, method="GET")
 
 
     def get_multi_task_status(self, project_id: str, batch_id: Optional[str]=None, client_batch_id: Optional[str]=None, client_batch_id_match_type: Optional[str]=None, date_type: Optional[str]=None, from_timestamp: Optional[str]=None, to_timestamp: Optional[str]=None, state: Optional[TaskStates] = None, omit_answers: Optional[bool] = True):
@@ -292,7 +297,7 @@ class Client:
 
         url = f"https://api.sama.com/v2/projects/{project_id}/tasks.json"
         headers = {"Accept": "application/json"}
-        t_state = getattr(state, 'value', None)
+        t_state = getattr(state, 'value', state)
         query_params = {
             "access_key": self.api_key,
             "batch_id": batch_id,

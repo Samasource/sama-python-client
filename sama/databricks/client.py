@@ -88,7 +88,7 @@ class Client(samaClient):
 
         data_gen = super().get_delivered_tasks(project_id=project_id, batch_id=batch_id, client_batch_id=client_batch_id,client_batch_id_match_type=client_batch_id_match_type, from_timestamp=from_timestamp, task_id=task_id)
 
-        spark = SparkSession.builder.appName('sama-databricks').getOrCreate()
+        spark = SparkSession.builder.appName('sama-databricks-connector').getOrCreate()
         
         return spark.read.json(spark.sparkContext.parallelize(Client.transform_nested_answers_json(data_gen)))
     
@@ -119,12 +119,12 @@ class Client(samaClient):
 
         data_gen = super().get_delivered_tasks_since_last_call(project_id=project_id,batch_id=batch_id, client_batch_id=client_batch_id,client_batch_id_match_type=client_batch_id_match_type, consumer=consumer)
         
-        spark = SparkSession.builder.appName('sama-databricks').getOrCreate()
+        spark = SparkSession.builder.appName('sama-databricks-connector').getOrCreate()
         
         return spark.read.json(spark.sparkContext.parallelize(Client.transform_nested_answers_json(data_gen)))
     
 
-    def get_task_status_to_table(self, spark: SparkSession, project_id, task_id, same_as_delivery=True) -> Optional[DataFrame]:
+    def get_task_status_to_table(self, spark: SparkSession, project_id, task_id, same_as_delivery=True) -> DataFrame:
         """
         Fetches task info for a single task
         https://docs.sama.com/reference/singletaskstatus
@@ -146,9 +146,11 @@ class Client(samaClient):
     
         """
         
-        data_json = super().get_task_status(project_id=project_id, task_id=task_id, same_as_delivery=same_as_delivery)
+        data_gen = super().get_task_status(project_id=project_id, task_id=task_id, same_as_delivery=same_as_delivery)
         
-        return spark.createDataFrame(json.loads(data_json))
+        spark = SparkSession.builder.appName('sama-databricks-connector').getOrCreate()
+        
+        return spark.read.json(spark.sparkContext.parallelize(Client.transform_nested_answers_json(data_gen)))
 
     def get_multi_task_status_to_table(self, spark: SparkSession, project_id, batch_id: Optional[str]=None, client_batch_id: Optional[str]=None, client_batch_id_match_type: Optional[str]=None, date_type: Optional[str]=None, from_timestamp: Optional[str]=None, to_timestamp: Optional[str]=None, state: Optional[TaskStates] = None, omit_answers=True) -> DataFrame:
         """     
@@ -190,7 +192,7 @@ class Client(samaClient):
        
         data_gen =  super().get_multi_task_status(project_id=project_id, batch_id=batch_id, client_batch_id=client_batch_id,client_batch_id_match_type=client_batch_id_match_type, from_timestamp=from_timestamp, state=state, omit_answers=omit_answers)
  
-        spark = SparkSession.builder.appName('sama-databricks').getOrCreate()
+        spark = SparkSession.builder.appName('sama-databricks-connector').getOrCreate()
         
         return spark.read.json(spark.sparkContext.parallelize(Client.transform_nested_answers_json(data_gen)))
 
