@@ -1,13 +1,13 @@
-
 import logging
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List
+from typing import Optional
 
-import requests
+import requests, json
 from retry import retry
 
 from sama.constants.tasks import TaskStates
 
-class CustomHTTPException(Exception):
+class RetriableHTTPExceptions(Exception):
     MAX_TRIES = 5
     DELAY = 1
     BACKOFF = 2
@@ -15,8 +15,8 @@ class CustomHTTPException(Exception):
 
     @staticmethod
     def raise_for_error_code(response_code, response):
-        if response_code in CustomHTTPException.ERROR_CODES:
-            raise CustomHTTPException(f"Retriable HTTP Error: {response_code}")
+        if response_code in RetriableHTTPExceptions.ERROR_CODES:
+            raise RetriableHTTPExceptions(f"Retriable HTTP Error: {response_code}")
         else:
             response.raise_for_status()
 
@@ -31,7 +31,7 @@ class Client:
         self,
         api_key: str,
         silent: bool = True,
-        logger: Union[logging.Logger, None] = None,
+        logger: Optional[logging.Logger] = None,
         log_level: int = logging.INFO,
     ) -> None:
         """
@@ -40,7 +40,7 @@ class Client:
         Args:
             api_key (str): The API key to use for authentication
             silent (bool): Whether to suppress all print/log statements. Defaults to False
-            logger (Union[Logger, None]): The logger to use for logging.
+            logger (Logger, optional): The logger to use for logging.
                 Defaults to None, meaning API interaction logs are printed to stdout
                 (unless silent is True), and retry logs are not recorded.
             log_level (int): The log level to use for logging. Defaults to logging.INFO (20)
@@ -55,7 +55,7 @@ class Client:
         self.logger = logger
         self.log_level = log_level
 
-    def __log_message(self, message: str, prefix: str = "Sama API: ") -> None:
+    def _log_message(self, message: str, prefix: str = "Sama API: ") -> None:
         """
         Logs a message. Currently prints to stdout, may support optionally using logger in the future
 
@@ -69,8 +69,12 @@ class Client:
             else:
                 print(prefix + message)
 
-    @retry(CustomHTTPException, tries=CustomHTTPException.MAX_TRIES, delay=CustomHTTPException.DELAY, backoff=CustomHTTPException.BACKOFF)
-    def __call_and_retry_http_method(self, url, json=None, params=None, headers=None, method=None):
+    @retry(RetriableHTTPExceptions, tries=RetriableHTTPExceptions.MAX_TRIES, delay=RetriableHTTPExceptions.DELAY, backoff=RetriableHTTPExceptions.BACKOFF)
+    def _call_and_retry_http_method(self, url, json=None, params=None, headers=None, method=None):
+
+        # Convert boolean values to lowercase strings
+        if params is not None and isinstance(params, dict):
+            params = {k: str(v).lower() if isinstance(v, bool) else v for k, v in params.items()}
 
         if method == "POST":
             response = requests.post(url, json=json, params=params, headers=headers)
@@ -79,11 +83,14 @@ class Client:
         elif method == "GET":
             response = requests.get(url, params=params, headers=headers)
 
-        CustomHTTPException.raise_for_error_code(response.status_code, response)
+        RetriableHTTPExceptions.raise_for_error_code(response.status_code, response)
 
-        return response.json() if response.text else None
-
-    def __fetch_paginated_results(self, url, json, params, headers, page_size=1000, method=None):
+        try:
+            return response.json()
+        except json.decoder.JSONDecodeError:
+            return None
+        
+    def _fetch_paginated_results(self, url, json, params, headers, page_size=1000, method=None):
         page_number = 1  # Start from the first page
         
         while True:
@@ -92,7 +99,7 @@ class Client:
                 'page_size': page_size
             })
             
-            data = self.__call_and_retry_http_method(url, json=json, params=params, headers=headers, method=method)
+            data = self._call_and_retry_http_method(url, json=json, params=params, headers=headers, method=method)
 
             if not data or not data['tasks']:  # if data is an empty list or equivalent
                 break
@@ -107,10 +114,10 @@ class Client:
 
     def create_task_batch(
         self,
-        proj_id: str,
+        project_id: str,
         task_data_records: List[Dict[str, Any]],
         batch_priority: int = 0,
-        notification_email: Union[str, None] = None,
+        notification_email: Optional[str] = None,
         submit: bool = False,
     ):
         """
@@ -118,7 +125,7 @@ class Client:
         (the tasks file upload approach)
 
         Args:
-            proj_id (str): The project ID on SamaHub where tasks are to be created
+            project_id (str): The project ID on SamaHub where tasks are to be created
             task_data_records (List[Dict[str, Any]]): The list of task "data" dicts
                 (inputs + preannotations)
             batch_priority (int): The priority of the batch. Defaults to 0. Negative numbers indicate higher priority
@@ -127,7 +134,7 @@ class Client:
             submit (bool): Whether to create the tasks in submitted state. Defaults to False
         """
 
-        url = f"https://api.sama.com/v2/projects/{proj_id}/batches.json"
+        url = f"https://api.sama.com/v2/projects/{project_id}/batches.json"
         headers = { "Accept": "application/json", "Content-Type": "application/json"}
         json = { "notification_email": notification_email }
         params = { "access_key": self.api_key }
@@ -142,58 +149,58 @@ class Client:
             })
 
         # call the 'create a batch of tasks' endpoint without the tasks list. It'll return a batch_id and a tasks_put_url(AWS S3) in which we'll upload the tasks to instead to avoid the 1000 tasks limit
-        json_response = self.__call_and_retry_http_method(url=url, json=json, params=params, headers=headers, method="POST") 
+        json_response = self._call_and_retry_http_method(url=url, json=json, params=params, headers=headers, method="POST") 
         
         # upload tasks directly to AWS S3 pre-signed url
-        self.__call_and_retry_http_method(url=json_response["tasks_put_url"], json=tasks, params=None, headers=headers, method="PUT")
+        self._call_and_retry_http_method(url=json_response["tasks_put_url"], json=tasks, params=None, headers=headers, method="PUT")
         
         # call the 'create a batch of tasks from an uploaded file' endpoint to signal file was uploaded and start creating tasks from it
         batch_id = json_response["batch_id"]
-        url = f"https://api.sama.com/v2/projects/{proj_id}/batches/{batch_id}/continue.json"
-        return self.__call_and_retry_http_method(url=url, headers=headers, params=params, method="POST")
+        url = f"https://api.sama.com/v2/projects/{project_id}/batches/{batch_id}/continue.json"
+        return self._call_and_retry_http_method(url=url, headers=headers, params=params, method="POST")
 
-    def cancel_batch_creation_job(self, proj_id: str, batch_id: str):
+    def cancel_batch_creation_job(self, project_id: str, batch_id: str):
         """
         cancel batch creation job
 
         Args:
-            proj_id (str): The project ID on SamaHub where the task exists
+            project_id (str): The project ID on SamaHub where the task exists
             batch_id (str): The IDs of the batch to cancel
         """
-        url = f"https://api.sama.com/v2/projects/{proj_id}/batches/{batch_id}/cancel.json"
+        url = f"https://api.sama.com/v2/projects/{project_id}/batches/{batch_id}/cancel.json"
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         params = {"access_key": self.api_key}
 
-        return self.__call_and_retry_http_method(url, params=params, headers=headers, method="POST")
+        return self._call_and_retry_http_method(url, params=params, headers=headers, method="POST")
 
-    def reject_task(self, proj_id: str, task_id: str, reasons: List[str]) -> requests.Response:
+    def reject_task(self, project_id: str, task_id: str, reasons: List[str]) -> requests.Response:
         """
         Rejects a task to send it for rework
 
         Args:
-            proj_id (str): The project ID on SamaHub where the task exists
+            project_id (str): The project ID on SamaHub where the task exists
             task_id (str): The ID of the task to reject
             reasons (List[str]): The list of reasons for rejecting the task
         """
 
-        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/{task_id}/reject.json"
+        url = f"https://api.sama.com/v2/projects/{project_id}/tasks/{task_id}/reject.json"
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         json = {"reasons": reasons}
         params = {"access_key": self.api_key}
 
-        return self.__call_and_retry_http_method(url, json=json, params=params, headers=headers, method="PUT")
+        return self._call_and_retry_http_method(url, json=json, params=params, headers=headers, method="PUT")
     
-    def update_task_priorities(self, proj_id: str, task_ids: List[str], priority: int) -> requests.Response:
+    def update_task_priorities(self, project_id: str, task_ids: List[str], priority: int):
         """
         Updates priority of tasks
 
         Args:
-            proj_id (str): The project ID on SamaHub where the task exists
+            project_id (str): The project ID on SamaHub where the task exists
             task_ids (List[str]): The IDs of the tasks to update priority
             priority (int): The priority
         """
 
-        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/bulk_update.json"
+        url = f"https://api.sama.com/v2/projects/{project_id}/tasks/bulk_update.json"
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         json = {
                 "task_ids": task_ids,
@@ -201,33 +208,34 @@ class Client:
         }
         params = {"access_key": self.api_key}
 
-        return self.__call_and_retry_http_method(url, json=json, params=params, headers=headers, method="POST")
+        return self._call_and_retry_http_method(url, json=json, params=params, headers=headers, method="POST")
 
-    def delete_tasks(self, proj_id: str, task_ids: List[str]) -> requests.Response:
+    def delete_tasks(self, project_id: str, task_ids: List[str]):
         """
         Delete tasks
 
         Args:
-            proj_id (str): The project ID on SamaHub where the task exists
+            project_id (str): The project ID on SamaHub where the task exists
             task_ids (List[str]): The IDs of the tasks to delete
         """
 
-        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/delete_tasks.json"
+        url = f"https://api.sama.com/v2/projects/{project_id}/tasks/delete_tasks.json"
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         json = {
                 "task_ids": task_ids
         }
         params = {"access_key": self.api_key}
 
-        return self.__call_and_retry_http_method(url, json=json, params=params, headers=headers, method="POST")
+        return self._call_and_retry_http_method(url, json=json, params=params, headers=headers, method="POST")
 
-    def get_task_status(self, proj_id, task_id, same_as_delivery=True):
+    def get_task_status(self, project_id: str, task_id: str, same_as_delivery=True):
         """
         Fetches task info for a single task
+        Returns generator object that is iterable.
         https://docs.sama.com/reference/singletaskstatus
 
         Args:
-            proj_id (str): The unique identifier of the project on SamaHub. 
+            project_id (str): The unique identifier of the project on SamaHub. 
                             Specifies the project under which the task resides.
             
             task_id (str): The unique identifier of the task within the specified 
@@ -241,23 +249,23 @@ class Client:
     
         """
 
-        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/{task_id}.json"
+        url = f"https://api.sama.com/v2/projects/{project_id}/tasks/{task_id}.json"
         headers = {"Accept": "application/json"}
         query_params = {
             "access_key": self.api_key,
             "same_as_delivery": same_as_delivery }
 
-        return next(self.__fetch_paginated_results(url, json=None, params=query_params, headers=headers, method="GET"))
+        return self._fetch_paginated_results(url, json=None, params=query_params, headers=headers, method="GET")
 
 
-    def get_multi_task_status(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, date_type=None, from_timestamp=None, to_timestamp=None, state:TaskStates = None, omit_answers=True):
+    def get_multi_task_status(self, project_id: str, batch_id: Optional[str]=None, client_batch_id: Optional[str]=None, client_batch_id_match_type: Optional[str]=None, date_type: Optional[str]=None, from_timestamp: Optional[str]=None, to_timestamp: Optional[str]=None, state: Optional[TaskStates] = None, omit_answers: Optional[bool] = True):
         """     
         Fetches task info for multiple tasks based on the provided filters.
         Returns generator object that is iterable.
         https://docs.sama.com/reference/multitaskstatus
 
         Args:
-            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+            project_id (str): The unique identifier of the project on SamaHub. Specifies 
                         the project under which the tasks reside.
 
             batch_id (str, optional): The identifier for a batch within the project. 
@@ -287,9 +295,9 @@ class Client:
 
         """
 
-        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks.json"
+        url = f"https://api.sama.com/v2/projects/{project_id}/tasks.json"
         headers = {"Accept": "application/json"}
-        t_state = getattr(state, 'value', None)
+        t_state = getattr(state, 'value', state)
         query_params = {
             "access_key": self.api_key,
             "batch_id": batch_id,
@@ -303,12 +311,12 @@ class Client:
         } 
         page_size=100
 
-        return self.__fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
+        return self._fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
   
-    def fetch_deliveries_since_timestamp(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, from_timestamp=None, task_id=None):
+    def get_delivered_tasks(self, project_id:str, batch_id: Optional[str]=None, client_batch_id: Optional[str]=None, client_batch_id_match_type: Optional[str]=None, from_timestamp: Optional[str]=None, task_id: Optional[str]=None):
         """
         Fetches all deliveries since a given timestamp(in the
-        RFC3339 format) for the specified project and optional filters.
+        RFC3339 format) for the specified project or other optional filters.
         Returns generator object that is iterable.
         
         Args:
@@ -332,7 +340,7 @@ class Client:
                                     fetches deliveries related to this specific task.
         """
 
-        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/delivered.json"
+        url = f"https://api.sama.com/v2/projects/{project_id}/tasks/delivered.json"
         headers = {"Accept": "application/json"}
         query_params = {
             "access_key": self.api_key,
@@ -344,15 +352,15 @@ class Client:
         } 
         page_size=1000
 
-        return self.__fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
+        return self._fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
     
-    def fetch_deliveries_since_last_call(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, consumer=None):
+    def get_delivered_tasks_since_last_call(self, project_id:str, batch_id: Optional[str]=None, client_batch_id: Optional[str]=None, client_batch_id_match_type: Optional[str]=None, consumer: Optional[str]=None):
         """
         Fetches all deliveries since last call based on a consumer token.
         Returns generator object that is iterable.
 
         Args:
-            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+            project_id (str): The unique identifier of the project on SamaHub. Specifies 
                         the project under which the deliveries reside.
 
             batch_id (str, optional): The identifier for a batch within the project. 
@@ -369,10 +377,11 @@ class Client:
                                       can be in different places of the delivered tasks list.
         """
 
-        url = f"https://api.sama.com/v2/projects/{proj_id}/tasks/delivered.json"
+        url = f"https://api.sama.com/v2/projects/{project_id}/tasks/delivered.json"
         query_params = {
             "access_key": self.api_key,
         }
+        limit=1000
         payload = {
             "batch_id": batch_id,
             "client_batch_id": client_batch_id,
@@ -381,18 +390,18 @@ class Client:
             "limit": limit
         }
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
-        limit=1000
+        
 
-        return self.__fetch_paginated_results(url, json=payload, params=query_params, headers=headers, page_size=limit, method="POST")
+        return self._fetch_paginated_results(url, json=payload, params=query_params, headers=headers, page_size=limit, method="POST")
 
 
-    def get_status_batch_creation_job(self, proj_id, batch_id, omit_failed_task_data=False):
+    def get_status_batch_creation_job(self, project_id:str, batch_id:str, omit_failed_task_data: Optional[bool]=False):
         """
         Retrieves the status of a batch creation job in the SamaHub project.
         Returns generator object that is iterable.
         
         Args:
-            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+            project_id (str): The unique identifier of the project on SamaHub. Specifies 
                         the project under which the batch resides.
 
             batch_id (str): The identifier for the batch within the project. This batch's 
@@ -403,7 +412,7 @@ class Client:
                                                 failed during the batch creation. Defaults to False.
         """
 
-        url = f"https://api.sama.com/v2/projects/{proj_id}/batches/{batch_id}.json"
+        url = f"https://api.sama.com/v2/projects/{project_id}/batches/{batch_id}.json"
         headers = {"Accept": "application/json"}
         query_params = {
             "access_key": self.api_key,
@@ -412,6 +421,6 @@ class Client:
         } 
         page_size=1000
 
-        return self.__fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
+        return self._fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
   
     
