@@ -4,7 +4,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(name='sama',
-        version='0.0.12',
+        version='0.0.16',
         description='Sama Python Client and Databricks Connector',
         long_description=long_description,
         long_description_content_type="text/markdown",

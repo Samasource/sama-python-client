@@ -314,3 +314,5 @@ Fetches status and details for multiple tasks. More details can be found in the 
 
 **Returns:**
 - A DataFrame with tasks and their status
+
+ 

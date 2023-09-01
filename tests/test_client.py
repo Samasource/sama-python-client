@@ -1,17 +1,17 @@
 import pytest
 from unittest.mock import patch, Mock
 
-from sama.client import Client, CustomHTTPException
+from sama.client import Client, RetriableHTTPExceptions
 
 def test_raise_for_error_code():
     # Test for raising exception on error code in list
-    with pytest.raises(CustomHTTPException, match="Retriable HTTP Error: 429"):
-        CustomHTTPException.raise_for_error_code(429, Mock())
+    with pytest.raises(RetriableHTTPExceptions, match="Retriable HTTP Error: 429"):
+        RetriableHTTPExceptions.raise_for_error_code(429, Mock())
 
     # Test for not raising exception on error code not in list
     mock_response = Mock()
     mock_response.raise_for_status = Mock()
-    CustomHTTPException.raise_for_error_code(400, mock_response)
+    RetriableHTTPExceptions.raise_for_error_code(400, mock_response)
     mock_response.raise_for_status.assert_called_once()
 
 @pytest.mark.parametrize(
@@ -106,6 +106,26 @@ def test_call_and_retry_http_method_retried():
 @pytest.fixture
 def client():
     return Client(api_key='test_key')
+
+def test_fetch_paginated_results_no_results(client):
+    # Mocked data
+    mock_data = {
+    }
+
+    with patch.object(client, '_call_and_retry_http_method', return_value=mock_data) as mock_method:
+        results = list(client._fetch_paginated_results(
+            "https://api.sama.com/test_endpoint",
+            json={},
+            params={},
+            headers={},
+            method="GET"
+        ))
+
+        # Check if the results are correctly retrieved
+        assert len(results) == 0
+
+        # Check if the mock method was called only once (since it's only one page of data)
+        mock_method.assert_called_once()
 
 def test_fetch_paginated_results_single_page(client):
     # Mocked data
@@ -234,7 +254,7 @@ def get_mock_response(json_data, status_code=200):
 # Test the create_task_batch method
 def test_create_task_batch():
     # Mock data
-    proj_id = "test_project"
+    project_id = "test_project"
     task_data_records = [{"input": "test_data"}]
     
     # Mock API responses
@@ -256,7 +276,7 @@ def test_create_task_batch():
          patch('requests.put', return_value=get_mock_response({})) as mock_put:
 
         client = Client(api_key="test_api_key")
-        response = client.create_task_batch(proj_id, task_data_records)
+        response = client.create_task_batch(project_id, task_data_records)
 
         # Check the correct methods were called
         assert mock_post.call_count == 2

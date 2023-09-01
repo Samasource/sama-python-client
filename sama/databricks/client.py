@@ -4,18 +4,21 @@ from sama.constants.tasks import TaskStates
 import pandas as pd
 import logging
 from typing import Any, Dict, List, Union
+from typing import Optional
 
 import requests
 import json
 
 #from databricks.sdk.runtime import *
+from pyspark.sql import SparkSession
+from pyspark.sql import DataFrame
 
 class Client(samaClient):
 
     def create_task_batch_from_table(
         self,
-        proj_id: str,
-        spark_dataframe,
+        project_id: str,
+        spark_dataframe: DataFrame,
         batch_priority: int = 0,
         notification_email: Union[str, None] = None,
         submit: bool = False,
@@ -25,7 +28,7 @@ class Client(samaClient):
         Each DataFrame column will be used as an input to the task creation, e.g. url='https://wiki.com/img.jpg', client_batch_id='batch1'
 
         Args:
-            proj_id (str): The project ID on SamaHub where tasks are to be created
+            project_id (str): The project ID on SamaHub where tasks are to be created
             spark_dataframe (DataFrame): The list of task "data"
                 (inputs + preannotations)
             batch_priority (int): The priority of the batch. Defaults to 0. Negative numbers indicate higher priority
@@ -44,16 +47,25 @@ class Client(samaClient):
                 if key.startswith(prefix):
                     dict_item[key] = json.loads(dict_item[key])
 
-        return super().create_task_batch(proj_id, task_data_records=data, batch_priority=batch_priority, notification_email=notification_email, submit=submit)
+        return super().create_task_batch(project_id, task_data_records=data, batch_priority=batch_priority, notification_email=notification_email, submit=submit)
 
-    def get_delivered_tasks_to_table(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, from_timestamp=None, task_id=None):
+    def transform_nested_answers_json(data_gen):
+        for data in data_gen:
+            if 'answers' in data:
+                data['answers'] = json.dumps(data['answers'])
+
+            yield data
+
+    def get_delivered_tasks_to_table(self, spark: SparkSession, project_id, batch_id: Optional[str]=None, client_batch_id: Optional[str]=None, client_batch_id_match_type: Optional[str]=None, from_timestamp: Optional[str]=None, task_id: Optional[str]=None) -> DataFrame:
         """
         Fetches all deliveries since a given timestamp(in the
         RFC3339 format) for the specified project and optional filters.
         Returns deliveries in a DataFrame
         
         Args:
-            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+            spark (SparkSession) : A spark session
+
+            project_id (str): The unique identifier of the project on SamaHub. Specifies 
                         the project under which the deliveries reside.
 
             batch_id (str, optional): The identifier for a batch within the project. 
@@ -74,24 +86,21 @@ class Client(samaClient):
         """
 
 
-        data_items = []
-        for data in super().get_delivered_tasks(proj_id=proj_id, batch_id=batch_id, client_batch_id=client_batch_id,client_batch_id_match_type=client_batch_id_match_type, from_timestamp=from_timestamp, task_id=task_id):
-            if 'answers' in data:
-                data['answers'] = json.dumps(data['answers'])
-            data_items.append(data)
+        data_gen = super().get_delivered_tasks(project_id=project_id, batch_id=batch_id, client_batch_id=client_batch_id,client_batch_id_match_type=client_batch_id_match_type, from_timestamp=from_timestamp, task_id=task_id)
 
-        # Convert JSON string to RDD
-        json_rdd = spark.sparkContext.parallelize(data_items)
-        # Convert RDD to DataFrame
-        return spark.read.json(json_rdd)
+        spark = SparkSession.builder.appName('sama-databricks').getOrCreate()
+        
+        return spark.read.json(spark.sparkContext.parallelize(Client.transform_nested_answers_json(data_gen)))
     
-    def get_delivered_tasks_since_last_call_to_table(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, consumer=None):
+    def get_delivered_tasks_since_last_call_to_table(self, spark: SparkSession, project_id, batch_id: Optional[str]=None, client_batch_id: Optional[str]=None, client_batch_id_match_type: Optional[str]=None, consumer: Optional[str]=None) -> DataFrame:
         """
         Fetches all deliveries since last call based on a consumer token.
         Returns deliveries in a DataFrame
 
         Args:
-            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+            spark (SparkSession) : A spark session
+
+            project_id (str): The unique identifier of the project on SamaHub. Specifies 
                         the project under which the deliveries reside.
 
             batch_id (str, optional): The identifier for a batch within the project. 
@@ -108,26 +117,22 @@ class Client(samaClient):
                                       can be in different places of the delivered tasks list.
         """
 
-
-        data_items = []
-        for data in super().get_delivered_tasks_since_last_call(proj_id=proj_id,batch_id=batch_id, client_batch_id=client_batch_id,client_batch_id_match_type=client_batch_id_match_type, consumer=consumer):
-            if 'answers' in data:
-                data['answers'] = json.dumps(data['answers'])
-            data_items.append(data)
-
-        # Convert JSON string to RDD
-        json_rdd = spark.sparkContext.parallelize(data_items)
-        # Convert RDD to DataFrame
-        return spark.read.json(json_rdd)
+        data_gen = super().get_delivered_tasks_since_last_call(project_id=project_id,batch_id=batch_id, client_batch_id=client_batch_id,client_batch_id_match_type=client_batch_id_match_type, consumer=consumer)
+        
+        spark = SparkSession.builder.appName('sama-databricks').getOrCreate()
+        
+        return spark.read.json(spark.sparkContext.parallelize(Client.transform_nested_answers_json(data_gen)))
     
 
-    def get_task_status_to_table(self, proj_id, task_id, same_as_delivery=True):
+    def get_task_status_to_table(self, spark: SparkSession, project_id, task_id, same_as_delivery=True) -> Optional[DataFrame]:
         """
         Fetches task info for a single task
         https://docs.sama.com/reference/singletaskstatus
 
         Args:
-            proj_id (str): The unique identifier of the project on SamaHub. 
+            spark (SparkSession) : A spark session
+
+            project_id (str): The unique identifier of the project on SamaHub. 
                             Specifies the project under which the task resides.
             
             task_id (str): The unique identifier of the task within the specified 
@@ -141,24 +146,20 @@ class Client(samaClient):
     
         """
         
-        data = super().get_task_status(proj_id=proj_id, task_id=task_id, same_as_delivery=same_as_delivery)
-        if 'answers' in data:
-            data['answers'] = json.dumps(data['answers'])
+        data_json = super().get_task_status(project_id=project_id, task_id=task_id, same_as_delivery=same_as_delivery)
+        
+        return spark.createDataFrame(json.loads(data_json))
 
-        # Convert JSON string to RDD
-        json_rdd = spark.sparkContext.parallelize([data])
-        # Convert RDD to DataFrame
-        return spark.read.json(json_rdd)
-
-
-    def get_multi_task_status_to_table(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, date_type=None, from_timestamp=None, to_timestamp=None, state:TaskStates = None, omit_answers=True):
+    def get_multi_task_status_to_table(self, spark: SparkSession, project_id, batch_id: Optional[str]=None, client_batch_id: Optional[str]=None, client_batch_id_match_type: Optional[str]=None, date_type: Optional[str]=None, from_timestamp: Optional[str]=None, to_timestamp: Optional[str]=None, state: Optional[TaskStates] = None, omit_answers=True) -> DataFrame:
         """     
         Fetches task info for multiple tasks based on the provided filters.
         Returns DataFrame of results
         https://docs.sama.com/reference/multitaskstatus
 
         Args:
-            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+            spark (SparkSession) : A spark session
+
+            project_id (str): The unique identifier of the project on SamaHub. Specifies 
                         the project under which the tasks reside.
 
             batch_id (str, optional): The identifier for a batch within the project. 
@@ -187,14 +188,9 @@ class Client(samaClient):
                                         be omitted from the response. Defaults to True.
         """
        
-        data_items = []
-        for data in super().get_multi_task_status(proj_id=proj_id, batch_id=batch_id, client_batch_id=client_batch_id,client_batch_id_match_type=client_batch_id_match_type, from_timestamp=from_timestamp, state=state, omit_answers=omit_answers):
-            if 'answers' in data:
-                data['answers'] = json.dumps(data['answers'])
-            data_items.append(data)
-
-        # Convert JSON string to RDD
-        json_rdd = spark.sparkContext.parallelize(data_items)
-        # Convert RDD to DataFrame
-        return spark.read.json(json_rdd)
+        data_gen =  super().get_multi_task_status(project_id=project_id, batch_id=batch_id, client_batch_id=client_batch_id,client_batch_id_match_type=client_batch_id_match_type, from_timestamp=from_timestamp, state=state, omit_answers=omit_answers)
+ 
+        spark = SparkSession.builder.appName('sama-databricks').getOrCreate()
+        
+        return spark.read.json(spark.sparkContext.parallelize(Client.transform_nested_answers_json(data_gen)))
 
