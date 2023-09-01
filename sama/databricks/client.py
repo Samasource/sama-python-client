@@ -1,4 +1,5 @@
 from sama import Client as samaClient
+from sama.constants.tasks import TaskStates
 
 import pandas as pd
 import logging
@@ -7,19 +8,9 @@ from typing import Any, Dict, List, Union
 import requests
 import json
 
-from databricks.sdk.runtime import *
+#from databricks.sdk.runtime import *
 
-class Client:
-
-    def __init__(
-        self,
-        api_key: str,
-        silent: bool = True,
-        logger: Union[logging.Logger, None] = None,
-        log_level: int = logging.INFO,
-    ) -> None:
-        
-        self.sama_client = samaClient(api_key, silent, logger, log_level)
+class Client(samaClient):
 
     def create_task_batch_from_table(
         self,
@@ -30,11 +21,12 @@ class Client:
         submit: bool = False,
     ):
         """
-        Creates a batch of tasks using data from a DataFrame
+        Creates a batch of tasks using data from a DataFrame.
+        Each DataFrame column will be used as an input to the task creation, e.g. url='https://wiki.com/img.jpg', client_batch_id='batch1'
 
         Args:
             proj_id (str): The project ID on SamaHub where tasks are to be created
-            spark_dataframe (DataFrame): The list of task "data" dicts
+            spark_dataframe (DataFrame): The list of task "data"
                 (inputs + preannotations)
             batch_priority (int): The priority of the batch. Defaults to 0. Negative numbers indicate higher priority
             notification_email (Union[str, None]): The email address where SamaHub
@@ -52,9 +44,9 @@ class Client:
                 if key.startswith(prefix):
                     dict_item[key] = json.loads(dict_item[key])
 
-        return self.sama_client.create_task_batch(proj_id, data)
+        return super().create_task_batch(proj_id, task_data_records=data, batch_priority=batch_priority, notification_email=notification_email, submit=submit)
 
-    def fetch_deliveries_since_timestamp_to_table(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, from_timestamp=None, task_id=None):
+    def get_delivered_tasks_to_table(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, from_timestamp=None, task_id=None):
         """
         Fetches all deliveries since a given timestamp(in the
         RFC3339 format) for the specified project and optional filters.
@@ -82,12 +74,127 @@ class Client:
         """
 
 
-        data = self.sama_client.fetch_deliveries_since_timestamp(proj_id, batch_id=batch_id, client_batch_id=client_batch_id, client_batch_id_match_type=client_batch_id_match_type, from_timestamp=from_timestamp, task_id=task_id)
-
-        for data_item in data:
-            data_item['answers'] = json.dumps(data_item['answers'])
+        data_items = []
+        for data in super().get_delivered_tasks(proj_id=proj_id, batch_id=batch_id, client_batch_id=client_batch_id,client_batch_id_match_type=client_batch_id_match_type, from_timestamp=from_timestamp, task_id=task_id):
+            if 'answers' in data:
+                data['answers'] = json.dumps(data['answers'])
+            data_items.append(data)
 
         # Convert JSON string to RDD
-        json_rdd = spark.sparkContext.parallelize(data)
+        json_rdd = spark.sparkContext.parallelize(data_items)
         # Convert RDD to DataFrame
         return spark.read.json(json_rdd)
+    
+    def get_delivered_tasks_since_last_call_to_table(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, consumer=None):
+        """
+        Fetches all deliveries since last call based on a consumer token.
+        Returns deliveries in a DataFrame
+
+        Args:
+            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+                        the project under which the deliveries reside.
+
+            batch_id (str, optional): The identifier for a batch within the project. 
+                                    If provided, filters deliveries that belong to this batch.
+
+            client_batch_id (str, optional): The client-specific identifier for a batch. 
+                                            Useful for filtering deliveries based on client-defined batches.
+
+            client_batch_id_match_type (str, optional): Specifies how the client_batch_id 
+                                                        should be matched. Common options might 
+                                                        include "exact" or "contains".
+
+            consumer (str, optional): Token that identifies the caller, so different consumers 
+                                      can be in different places of the delivered tasks list.
+        """
+
+
+        data_items = []
+        for data in super().get_delivered_tasks_since_last_call(proj_id=proj_id,batch_id=batch_id, client_batch_id=client_batch_id,client_batch_id_match_type=client_batch_id_match_type, consumer=consumer):
+            if 'answers' in data:
+                data['answers'] = json.dumps(data['answers'])
+            data_items.append(data)
+
+        # Convert JSON string to RDD
+        json_rdd = spark.sparkContext.parallelize(data_items)
+        # Convert RDD to DataFrame
+        return spark.read.json(json_rdd)
+    
+
+    def get_task_status_to_table(self, proj_id, task_id, same_as_delivery=True):
+        """
+        Fetches task info for a single task
+        https://docs.sama.com/reference/singletaskstatus
+
+        Args:
+            proj_id (str): The unique identifier of the project on SamaHub. 
+                            Specifies the project under which the task resides.
+            
+            task_id (str): The unique identifier of the task within the specified 
+                            project on SamaHub. Identifies the specific task for 
+                            which the status is being requested.
+
+            same_as_delivery (bool, optional): Flag to determine the format of the 
+                                                task data to be returned. If True (default),
+                                                task data is returned in the same format 
+                                                as delivery.
+    
+        """
+        
+        data = super().get_task_status(proj_id=proj_id, task_id=task_id, same_as_delivery=same_as_delivery)
+        if 'answers' in data:
+            data['answers'] = json.dumps(data['answers'])
+
+        # Convert JSON string to RDD
+        json_rdd = spark.sparkContext.parallelize([data])
+        # Convert RDD to DataFrame
+        return spark.read.json(json_rdd)
+
+
+    def get_multi_task_status_to_table(self, proj_id, batch_id=None, client_batch_id=None, client_batch_id_match_type=None, date_type=None, from_timestamp=None, to_timestamp=None, state:TaskStates = None, omit_answers=True):
+        """     
+        Fetches task info for multiple tasks based on the provided filters.
+        Returns DataFrame of results
+        https://docs.sama.com/reference/multitaskstatus
+
+        Args:
+            proj_id (str): The unique identifier of the project on SamaHub. Specifies 
+                        the project under which the tasks reside.
+
+            batch_id (str, optional): The identifier for a batch within the project. 
+                                    If provided, filters tasks that belong to this batch.
+
+            client_batch_id (str, optional): The client-specific identifier for a batch. 
+                                            Useful for filtering tasks based on client-defined batches.
+
+            client_batch_id_match_type (str, optional): Specifies how the client_batch_id 
+                                                        should be matched. Common options might 
+                                                        include "exact" or "contains".
+
+            date_type (str, optional): Determines which date to use for the timestamp 
+                                    filters. Examples might include "creation_date" or "completion_date".
+
+            from_timestamp (str, optional): Filters tasks that have a date (specified by date_type) 
+                                            after this timestamp.
+
+            to_timestamp (str, optional): Filters tasks that have a date (specified by date_type) 
+                                        before this timestamp.
+
+            state (TaskStates, optional): An enum value that specifies the desired status of the 
+                                        tasks to filter. For example, "delivered" or "acknowledged".
+
+            omit_answers (bool, optional): Flag to determine if answers related to tasks should 
+                                        be omitted from the response. Defaults to True.
+        """
+       
+        data_items = []
+        for data in super().get_multi_task_status(proj_id=proj_id, batch_id=batch_id, client_batch_id=client_batch_id,client_batch_id_match_type=client_batch_id_match_type, from_timestamp=from_timestamp, state=state, omit_answers=omit_answers):
+            if 'answers' in data:
+                data['answers'] = json.dumps(data['answers'])
+            data_items.append(data)
+
+        # Convert JSON string to RDD
+        json_rdd = spark.sparkContext.parallelize(data_items)
+        # Convert RDD to DataFrame
+        return spark.read.json(json_rdd)
+
