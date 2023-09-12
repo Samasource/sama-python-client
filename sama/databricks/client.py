@@ -17,8 +17,8 @@ class Client(samaClient):
 
     def create_task_batch_from_table(
         self,
-        project_id: str,
         spark_dataframe: DataFrame,
+        project_id: str,
         batch_priority: int = 0,
         notification_email: Union[str, None] = None,
         submit: bool = False,
@@ -28,9 +28,9 @@ class Client(samaClient):
         Each DataFrame column will be used as an input to the task creation, e.g. url='https://wiki.com/img.jpg', client_batch_id='batch1'
 
         Args:
-            project_id (str): The project ID on SamaHub where tasks are to be created
             spark_dataframe (DataFrame): The list of task "data"
                 (inputs + preannotations)
+            project_id (str): The project ID on SamaHub where tasks are to be created
             batch_priority (int): The priority of the batch. Defaults to 0. Negative numbers indicate higher priority
             notification_email (Union[str, None]): The email address where SamaHub
                 should send notifications about the batch creation status. Defaults to None
