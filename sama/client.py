@@ -69,9 +69,9 @@ class Client:
             else:
                 print(prefix + message)
 
-    @retry(RetriableHTTPExceptions, tries=RetriableHTTPExceptions.MAX_TRIES, delay=RetriableHTTPExceptions.DELAY, backoff=RetriableHTTPExceptions.BACKOFF)
+    @retry((RetriableHTTPExceptions, ConnectionError), tries=RetriableHTTPExceptions.MAX_TRIES, delay=RetriableHTTPExceptions.DELAY, backoff=RetriableHTTPExceptions.BACKOFF)
     def _call_and_retry_http_method(self, url, json=None, params=None, headers=None, method=None):
-
+        
         # Convert boolean values to lowercase strings
         if params is not None and isinstance(params, dict):
             params = {k: str(v).lower() if isinstance(v, bool) else v for k, v in params.items()}
