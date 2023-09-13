@@ -190,8 +190,8 @@ Each DataFrame column will be used as an input to the task creation, e.g. url='h
 
 **Parameters:**
 
-- `proj_id (str)`: The project ID on SamaHub where tasks are to be created.
 - `spark_dataframe (DataFrame)`: The Spark DataFrame to be converted to task data records.
+- `project_id (str)`: The project ID on SamaHub where tasks are to be created.
 - `batch_priority (int)`: The priority of the batch. Defaults to 0. Negative numbers indicate higher priority
 - `notification_email (Union[str, None])`: The email address where SamaHub should send notifications about the batch creation status. Defaults to None
 - `submit (bool)`: Whether to create the tasks in submitted state. Defaults to False
@@ -205,7 +205,7 @@ This method fetches all deliveries since a given timestamp
 **Parameters:**
 
 - `spark (SparkSession)` : A spark session
-- `proj_id (str)`: The unique identifier of the project on SamaHub. Specifies the project under which the deliveries reside.
+- `project_id (str)`: The unique identifier of the project on SamaHub. Specifies the project under which the deliveries reside.
 - `batch_id (str, optional)`: The identifier for a batch within the project. If provided, filters deliveries that belong to this batch.
 - `client_batch_id (str, optional)`: The client-specific identifier for a batch. Useful for filtering deliveries based on client-defined batches.
 - `client_batch_id_match_type (str, optional)`: Specifies how the `client_batch_id` should be matched. Common options might include "exact" or "contains".
@@ -225,7 +225,7 @@ Fetches all deliveries since the last call based on a consumer token.
 **Parameters:**
 
 - `spark (SparkSession)` : A spark session
-- `proj_id (str)`: The unique identifier of the project on SamaHub. Specifies the project under which the deliveries reside.
+- `project_id (str)`: The unique identifier of the project on SamaHub. Specifies the project under which the deliveries reside.
 - `batch_id (str, optional)`: The identifier for a batch within the project. If provided, filters deliveries that belong to this batch.
 - `client_batch_id (str, optional)`: The client-specific identifier for a batch. Useful for filtering deliveries based on client-defined batches.
 - `client_batch_id_match_type (str, optional)`: Specifies how the `client_batch_id` should be matched. Common options might include "exact" or "contains".
@@ -237,13 +237,13 @@ Returns deliveries in a DataFrame.
 
 ---
 
-### `get_task_status`
+### `get_task_status_to_table`
 
 Fetches the status and details of a single task. More details can be found in the [Sama documentation](https://docs.sama.com/reference/singletaskstatus).
 
 **Parameters:**
 - `spark (SparkSession)` : A spark session
-- `proj_id`: The project ID on SamaHub.
+- `project_id`: The project ID on SamaHub.
 - `task_id`: The ID of the task to fetch.
 - `same_as_delivery (default=True)`: Whether to fetch the task as it would be delivered.
 
@@ -258,7 +258,7 @@ Fetches status and details for multiple tasks. More details can be found in the 
 
 **Parameters:**
 - `spark (SparkSession)` : A spark session
-- `proj_id (str)`: The unique identifier of the project on SamaHub. This parameter specifies the project under which the tasks reside.
+- `project_id (str)`: The unique identifier of the project on SamaHub. This parameter specifies the project under which the tasks reside.
 - `batch_id (str, optional)`: The identifier for a batch within the project. If provided, it filters tasks that belong to this specific batch.
 - `client_batch_id (str, optional)`: The client-specific identifier for a batch. This is useful for filtering tasks based on client-defined batches.
 - `client_batch_id_match_type (str, optional)`: This parameter specifies how the `client_batch_id` should be matched. Common options might include "exact" or "contains".
