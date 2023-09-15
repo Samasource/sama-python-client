@@ -4,7 +4,7 @@
 
 This is the Python Client for the [Sama API endpoints](https://docs.sama.com/reference/documentation) and Databricks Connector.
 
-See our [Python SDK tutorial](Sama_Python_SDK_Tutorial.ipynb) and [Databricks Connector tutorial](Sama_Databricks_Connector_Tutorial.ipynb).
+See our [Python SDK tutorial](https://github.com/Samasource/sama-python-client/blob/main/Sama_Python_SDK_Tutorial.ipynb) and [Databricks Connector tutorial](https://github.com/Samasource/sama-python-client/blob/main/Sama_Databricks_Connector_Tutorial.ipynb).
 
 ### Usage
 
