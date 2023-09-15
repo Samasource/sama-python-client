@@ -1,4 +1,5 @@
 import pytest
+import requests
 from unittest.mock import patch, Mock
 
 from sama.client import Client, RetriableHTTPExceptions
@@ -13,6 +14,22 @@ def test_raise_for_error_code():
     mock_response.raise_for_status = Mock()
     RetriableHTTPExceptions.raise_for_error_code(400, mock_response)
     mock_response.raise_for_status.assert_called_once()
+
+def test_call_and_retry_http_method_connection_error():
+    
+    # Mock the requests.get to always raise a ConnectionError
+    with patch.object(requests, "get", side_effect=ConnectionError()) as mocked_get:
+        
+        instance = Client("test_api_key") 
+        
+        # Since the method has a retry decorator, 
+        # the ConnectionError should be raised after MAX_TRIES.
+        with pytest.raises(ConnectionError):
+            instance._call_and_retry_http_method("some_url", method="GET")
+
+        # Check the number of times the mocked function was called
+        expected_retries = RetriableHTTPExceptions.MAX_TRIES
+        assert mocked_get.call_count == expected_retries    
 
 @pytest.mark.parametrize(
     "http_method, expected_request_call",
@@ -30,7 +47,7 @@ def test_call_and_retry_http_method(mock_requests, http_method, expected_request
 
     result = client._call_and_retry_http_method(
         url="http://sample.com",
-        json={},
+        payload={},
         params={},
         headers={},
         method=http_method
@@ -55,7 +72,7 @@ def test_call_and_retry_http_method_empty_response(mock_requests, http_method, e
 
     result = client._call_and_retry_http_method(
         url="http://sample.com",
-        json={},
+        payload={},
         params={},
         headers={},
         method=http_method
@@ -80,7 +97,7 @@ def test_call_and_retry_http_method_array_response(mock_requests, http_method, e
 
     result = client._call_and_retry_http_method(
         url="http://sample.com",
-        json={},
+        payload={},
         params={},
         headers={},
         method=http_method
@@ -115,7 +132,7 @@ def test_fetch_paginated_results_no_results(client):
     with patch.object(client, '_call_and_retry_http_method', return_value=mock_data) as mock_method:
         results = list(client._fetch_paginated_results(
             "https://api.sama.com/test_endpoint",
-            json={},
+            payload={},
             params={},
             headers={},
             method="GET"
@@ -139,7 +156,7 @@ def test_fetch_paginated_results_single_page(client):
     with patch.object(client, '_call_and_retry_http_method', return_value=mock_data) as mock_method:
         results = list(client._fetch_paginated_results(
             "https://api.sama.com/test_endpoint",
-            json={},
+            payload={},
             params={},
             headers={},
             method="GET"
@@ -170,7 +187,7 @@ def test_fetch_paginated_results_multiple_pages_limit(client):
     with patch.object(client, '_call_and_retry_http_method', side_effect=mock_return_values) as mock_method:
         results = list(client._fetch_paginated_results(
             "https://api.sama.com/test_endpoint",
-            json={},
+            payload={},
             params={},
             headers={},
             page_size=2,
@@ -205,7 +222,7 @@ def test_fetch_paginated_results_multiple_pages(client):
     with patch.object(client, '_call_and_retry_http_method', side_effect=mock_return_values) as mock_method:
         results = list(client._fetch_paginated_results(
             "https://api.sama.com/test_endpoint",
-            json={},
+            payload={},
             params={},
             headers={},
             page_size=2,
