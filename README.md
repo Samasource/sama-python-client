@@ -1,28 +1,30 @@
 
 
-## Sama SDK
+## Sama Python SDK and Databricks Connector
 
-This is the Python Client for the [SamaHub API endpoints](https://docs.sama.com/reference/documentation) and Databricks Connector.
+This is the Python Client for the [Sama API endpoints](https://docs.sama.com/reference/documentation) and Databricks Connector.
+
+See our [Python SDK tutorial](Sama_Python_SDK_Tutorial.ipynb) and [Databricks Connector tutorial](Sama_Databricks_Connector_Tutorial.ipynb).
 
 ### Usage
 
+#### Python Client
 ```python
 from sama import Client
+
 client = Client("your_api_key")
 client.create_task_batch("project_id", [{"url": "https://yoururl.com/img.jpg", "input2": "value2"}])
 client.get_delivered_tasks("project_id", from_timestamp="2023-09-02T10:23:36.536167366Z")
 ```
 
+#### Databricks Connector
 ```python
 from sama.databricks import Client
-import pyspark
-from pyspark.sql import SparkSession
-from pyspark.sql import DataFrame
 
-spark = SparkSession.builder.appName('sama').getOrCreate()
 client = Client("your_api_key")
-spark_df = client.get_delivered_tasks_to_table(spark, "project_id", from_timestamp="2023-09-02T10:23:36.536167366Z")
 client.create_task_batch_from_table("project_id", spark_df) # spark_df contains inputs to tasks
+spark_df = client.get_delivered_tasks_to_table(spark, "project_id", from_timestamp="2023-09-02T10:23:36.536167366Z")
+
 ```
 
 ---
@@ -81,6 +83,8 @@ Cancels an ongoing batch creation job.
 **Returns:**
 - Response from the API endpoint.
 
+---
+
 
 ---
 
@@ -92,6 +96,29 @@ Rejects a task on SamaHub to send it back for rework.
 - `proj_id (str)`: The project ID on SamaHub where the task exists.
 - `task_id (str)`: The ID of the task to reject.
 - `reasons (List[str])`: List of reasons for rejecting the task.
+
+**Returns:**
+- Response from the API endpoint.
+
+---
+
+Updates priority of tasks
+
+**Parameters:**
+- `project_id (str)`: The project ID on SamaHub where the task exists.
+- `task_ids (List[str])`: The IDs of the tasks to update priority.
+- `priority (int)`: The priority.
+
+**Returns:**
+- Response from the API endpoint.
+
+---
+
+Delete tasks
+
+**Parameters:**
+- `project_id (str)`: The project ID on SamaHub where the task exists.
+- `task_ids (List[str])`: The IDs of the tasks to delete.
 
 **Returns:**
 - Response from the API endpoint.
