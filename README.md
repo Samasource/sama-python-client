@@ -179,7 +179,55 @@ Fetches information about a batch creation job.
 
 ---
 
+### `get_creation_task_schema`
 
+Fetches the JSON schema for task creation on SamaHub.
+
+**Parameters:**
+- `project_id (str)`: The project ID on SamaHub.
+
+**Returns:**
+- A dictionary containing the JSON schema for task creation.
+
+---
+
+### `get_delivery_task_schema`
+
+Fetches the JSON schema for task deliveries on SamaHub.
+
+**Parameters:**
+- `project_id (str)`: The project ID on SamaHub.
+
+**Returns:**
+- A dictionary containing the JSON schema for task deliveries.
+
+---
+
+### `get_project_information`
+
+Fetches high-level information about a project from SamaHub.
+
+**Parameters:**
+- `project_id (str)`: The project ID on SamaHub.
+
+**Returns:**
+- A dictionary containing information about the project.
+
+---
+
+### `get_project_stats`
+
+Fetches high-level statistics about a project's tasks within a specified time frame from SamaHub.
+
+**Parameters:**
+- `project_id (str)`: The project ID on SamaHub.
+- `from_timestamp (str, optional)`: Filters tasks that have a date after this timestamp.
+- `to_timestamp (str, optional)`: Filters tasks that have a date before this timestamp.
+
+**Returns:**
+- A dictionary containing project statistics.
+
+---
 
 ## sama.databricks Client
 
@@ -187,6 +235,8 @@ Fetches information about a batch creation job.
 
 Creates a batch of tasks using data from a DataFrame.
 Each DataFrame column will be used as an input to the task creation, e.g. url='https://wiki.com/img.jpg', client_batch_id='batch1'
+Prepend 'output_' to column to specify pre-annotations
+Return JSON - batch_id if successful
 
 **Parameters:**
 
@@ -195,6 +245,9 @@ Each DataFrame column will be used as an input to the task creation, e.g. url='h
 - `batch_priority (int)`: The priority of the batch. Defaults to 0. Negative numbers indicate higher priority
 - `notification_email (Union[str, None])`: The email address where SamaHub should send notifications about the batch creation status. Defaults to None
 - `submit (bool)`: Whether to create the tasks in submitted state. Defaults to False
+
+**Returns:**
+JSON - batch_id if successful
 
 ---
 

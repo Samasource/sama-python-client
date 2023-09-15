@@ -26,6 +26,8 @@ class Client(samaClient):
         """
         Creates a batch of tasks using data from a DataFrame.
         Each DataFrame column will be used as an input to the task creation, e.g. url='https://wiki.com/img.jpg', client_batch_id='batch1'
+        Prepend 'output_' to column to specify pre-annotations
+        Return JSON - batch_id if successful
 
         Args:
             spark_dataframe (DataFrame): The list of task "data"
@@ -41,11 +43,11 @@ class Client(samaClient):
 
         prefix = "output_"
 
-        # Iterate over the list of dictionaries
+        # Convert pre-annotations(columns with output_) that are represented as JSON strings to a dictionary.
         for dict_item in data:
-            for key, value in dict_item.items():
-                if key.startswith(prefix):
-                    dict_item[key] = json.loads(dict_item[key])
+            for key, value in list(dict_item.items()):  # Use list() to avoid runtime modification issues
+                if key.startswith(prefix) and value is not None and isinstance(value, str):  # Ensure value is not None and is a string
+                    dict_item[key] = json.loads(value)
 
         return super().create_task_batch(project_id, task_data_records=data, batch_priority=batch_priority, notification_email=notification_email, submit=submit)
 

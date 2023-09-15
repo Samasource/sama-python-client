@@ -3,6 +3,7 @@ from typing import Any, Dict, List
 from typing import Optional
 
 import requests, json
+from requests.exceptions import JSONDecodeError
 from retry import retry
 
 from sama.constants.tasks import TaskStates
@@ -69,17 +70,20 @@ class Client:
             else:
                 print(prefix + message)
 
+    def print_logger(msg, *args, **kwargs):
+        print(msg % args)
+
     @retry((RetriableHTTPExceptions, ConnectionError), tries=RetriableHTTPExceptions.MAX_TRIES, delay=RetriableHTTPExceptions.DELAY, backoff=RetriableHTTPExceptions.BACKOFF)
-    def _call_and_retry_http_method(self, url, json=None, params=None, headers=None, method=None):
+    def _call_and_retry_http_method(self, url, payload=None, params=None, headers=None, method=None):
         
         # Convert boolean values to lowercase strings
         if params is not None and isinstance(params, dict):
             params = {k: str(v).lower() if isinstance(v, bool) else v for k, v in params.items()}
 
         if method == "POST":
-            response = requests.post(url, json=json, params=params, headers=headers)
+            response = requests.post(url, json=payload, params=params, headers=headers)
         elif method == "PUT":
-            response = requests.put(url, json=json, params=params, headers=headers)
+            response = requests.put(url, json=payload, params=params, headers=headers)
         elif method == "GET":
             response = requests.get(url, params=params, headers=headers)
 
@@ -87,10 +91,10 @@ class Client:
 
         try:
             return response.json()
-        except json.decoder.JSONDecodeError:
+        except JSONDecodeError:
             return None
         
-    def _fetch_paginated_results(self, url, json, params, headers, page_size=1000, method=None):
+    def _fetch_paginated_results(self, url, payload, params, headers, page_size=1000, method=None):
         page_number = 1  # Start from the first page
         
         while True:
@@ -99,9 +103,18 @@ class Client:
                 'page_size': page_size
             })
             
-            data = self._call_and_retry_http_method(url, json=json, params=params, headers=headers, method=method)
+            data = self._call_and_retry_http_method(url, payload=payload, params=params, headers=headers, method=method)
 
-            if not data or not data['tasks']:  # if data is an empty list or equivalent
+            if not data:
+                break
+
+            # return single task data
+            if 'task' in data: 
+                yield data['task']
+                break
+
+            # continue logic for other endpoints that return multiple tasks
+            if not data['tasks']:  
                 break
 
             for item in data['tasks']:
@@ -149,10 +162,10 @@ class Client:
             })
 
         # call the 'create a batch of tasks' endpoint without the tasks list. It'll return a batch_id and a tasks_put_url(AWS S3) in which we'll upload the tasks to instead to avoid the 1000 tasks limit
-        json_response = self._call_and_retry_http_method(url=url, json=json, params=params, headers=headers, method="POST") 
+        json_response = self._call_and_retry_http_method(url=url, payload=json, params=params, headers=headers, method="POST") 
         
         # upload tasks directly to AWS S3 pre-signed url
-        self._call_and_retry_http_method(url=json_response["tasks_put_url"], json=tasks, params=None, headers=headers, method="PUT")
+        self._call_and_retry_http_method(url=json_response["tasks_put_url"], payload=tasks, params=None, headers=headers, method="PUT")
         
         # call the 'create a batch of tasks from an uploaded file' endpoint to signal file was uploaded and start creating tasks from it
         batch_id = json_response["batch_id"]
@@ -188,7 +201,7 @@ class Client:
         json = {"reasons": reasons}
         params = {"access_key": self.api_key}
 
-        return self._call_and_retry_http_method(url, json=json, params=params, headers=headers, method="PUT")
+        return self._call_and_retry_http_method(url, payload=json, params=params, headers=headers, method="PUT")
     
     def update_task_priorities(self, project_id: str, task_ids: List[str], priority: int):
         """
@@ -208,7 +221,7 @@ class Client:
         }
         params = {"access_key": self.api_key}
 
-        return self._call_and_retry_http_method(url, json=json, params=params, headers=headers, method="POST")
+        return self._call_and_retry_http_method(url, payload=json, params=params, headers=headers, method="POST")
 
     def delete_tasks(self, project_id: str, task_ids: List[str]):
         """
@@ -226,7 +239,7 @@ class Client:
         }
         params = {"access_key": self.api_key}
 
-        return self._call_and_retry_http_method(url, json=json, params=params, headers=headers, method="POST")
+        return self._call_and_retry_http_method(url, payload=json, params=params, headers=headers, method="POST")
 
     def get_task_status(self, project_id: str, task_id: str, same_as_delivery=True):
         """
@@ -255,7 +268,7 @@ class Client:
             "access_key": self.api_key,
             "same_as_delivery": same_as_delivery }
 
-        return self._fetch_paginated_results(url, json=None, params=query_params, headers=headers, method="GET")
+        return self._fetch_paginated_results(url, payload=None, params=query_params, headers=headers, method="GET")
 
 
     def get_multi_task_status(self, project_id: str, batch_id: Optional[str]=None, client_batch_id: Optional[str]=None, client_batch_id_match_type: Optional[str]=None, date_type: Optional[str]=None, from_timestamp: Optional[str]=None, to_timestamp: Optional[str]=None, state: Optional[TaskStates] = None, omit_answers: Optional[bool] = True):
@@ -311,7 +324,7 @@ class Client:
         } 
         page_size=100
 
-        return self._fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
+        return self._fetch_paginated_results(url, payload=None, params=query_params, headers=headers, page_size=page_size, method="GET")
   
     def get_delivered_tasks(self, project_id:str, batch_id: Optional[str]=None, client_batch_id: Optional[str]=None, client_batch_id_match_type: Optional[str]=None, from_timestamp: Optional[str]=None, task_id: Optional[str]=None):
         """
@@ -352,7 +365,7 @@ class Client:
         } 
         page_size=1000
 
-        return self._fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
+        return self._fetch_paginated_results(url, payload=None, params=query_params, headers=headers, page_size=page_size, method="GET")
     
     def get_delivered_tasks_since_last_call(self, project_id:str, batch_id: Optional[str]=None, client_batch_id: Optional[str]=None, client_batch_id_match_type: Optional[str]=None, consumer: Optional[str]=None):
         """
@@ -392,7 +405,7 @@ class Client:
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         
 
-        return self._fetch_paginated_results(url, json=payload, params=query_params, headers=headers, page_size=limit, method="POST")
+        return self._fetch_paginated_results(url, payload=payload, params=query_params, headers=headers, page_size=limit, method="POST")
 
 
     def get_status_batch_creation_job(self, project_id:str, batch_id:str, omit_failed_task_data: Optional[bool]=False):
@@ -421,6 +434,69 @@ class Client:
         } 
         page_size=1000
 
-        return self._fetch_paginated_results(url, json=None, params=query_params, headers=headers, page_size=page_size, method="GET")
+        return self._fetch_paginated_results(url, payload=None, params=query_params, headers=headers, page_size=page_size, method="GET")
   
+    def get_creation_task_schema(self, project_id: str):
+        """
+        Get json schema for task creation
+
+        Args:
+            project_id (str): The project ID on SamaHub
+        """
+
+        url = f"https://api.sama.com/v2/projects/{project_id}/schemas/create_task.json"
+        headers = {"Accept": "application/json"}
+        params = {"access_key": self.api_key}
+
+        return self._call_and_retry_http_method(url, params=params, headers=headers, method="GET")
+
+    def get_delivery_task_schema(self, project_id: str):
+        """
+        Get json schema for task deliveries
+
+        Args:
+            project_id (str): The project ID on SamaHub
+        """
+
+        url = f"https://api.sama.com/v2/projects/{project_id}/schemas/deliver_task.json"
+        headers = {"Accept": "application/json"}
+        params = {"access_key": self.api_key}
+
+        return self._call_and_retry_http_method(url, params=params, headers=headers, method="GET")
     
+    def get_project_information(self, project_id: str):
+        """
+        Gets high-level information about a project
+
+        Args:
+            project_id (str): The project ID on SamaHub
+        """
+
+        url = f"https://api.sama.com/v2/projects/{project_id}.json"
+        headers = {"Accept": "application/json"}
+        params = {"access_key": self.api_key}
+
+        return self._call_and_retry_http_method(url, params=params, headers=headers, method="GET")
+    
+    def get_project_stats(self, project_id: str, from_timestamp: Optional[str]=None, to_timestamp: Optional[str]=None):
+        """
+        Gets high-level information about a project
+
+        Args:
+            project_id (str): The project ID on SamaHub
+
+            from_timestamp (str, optional): Filters tasks that have a date (specified by date_type) 
+                                            after this timestamp.
+
+            to_timestamp (str, optional): Filters tasks that have a date (specified by date_type) 
+                                        before this timestamp.
+        """
+
+        url = f"https://api.sama.com/v2/projects/{project_id}/stats.json"
+        headers = {"Accept": "application/json"}
+        query_params = {
+            "access_key": self.api_key,
+            "from":from_timestamp,
+            "to":to_timestamp
+        } 
+        return self._call_and_retry_http_method(url, params=query_params, headers=headers, method="GET")
