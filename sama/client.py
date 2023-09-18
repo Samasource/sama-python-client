@@ -132,6 +132,7 @@ class Client:
         batch_priority: int = 0,
         notification_email: Optional[str] = None,
         submit: bool = False,
+        tasks_file_name: Optional[str] = "python_sdk"
     ):
         """
         Creates a batch of tasks using the two async batch task creation API endpoints
@@ -149,7 +150,8 @@ class Client:
 
         url = f"https://api.sama.com/v2/projects/{project_id}/batches.json"
         headers = { "Accept": "application/json", "Content-Type": "application/json"}
-        json = { "notification_email": notification_email }
+        json = { "notification_email": notification_email,
+                 "tasks_file_name": tasks_file_name }
         params = { "access_key": self.api_key }
 
         # construct the tasks list, which contains objects with data(inputs, pre-annotations), priority and whether to submit
